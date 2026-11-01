@@ -1,0 +1,22 @@
+# fuera del repositorio
+literature/
+tex/
+
+# datos: se obtienen de las fuentes del README (1,7 GB); se conserva la carpeta data/raw/
+replication/data/*
+!replication/data/raw/
+replication/data/raw/*
+!replication/data/raw/.gitkeep
+
+# generados al correr run_all.R
+replication/logs/
+
+# R, RStudio y renv (renv/.gitignore ignora la librería local)
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+Rplots.pdf
+
+# sistema
+.DS_Store
