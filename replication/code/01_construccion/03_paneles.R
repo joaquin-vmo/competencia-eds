@@ -163,7 +163,8 @@ inicio_id <- idinfo[, .(fecha_entrante = min(first_date)), by = station_key]   #
 #   *5_entry: la misma asignación con radio 5 km (primera entrada y, en el mismo mes, la más cercana).
 #   g_entry_r<k>, g2_entry_r<k> (k en RADIOS_EXTRA): primera y segunda entrada competidora a <= k km,
 #     para usar el radio k como definición de tratada.
-#   entrante_*: las entrantes que tratan a la estación (mes g_entry, <= 2 km, otra marca).
+#   entrante_*: las entrantes que tratan a la estación (mes g_entry, <= 2 km, otra marca); entrante_marca
+#     es la marca de la más cercana de ellas.
 min_o_na <- function(x) if (all(is.na(x))) NA_integer_ else as.integer(min(x, na.rm = TRUE))
 
 asignar_tratamiento <- function(sloc, entradas) {
@@ -208,6 +209,7 @@ asignar_tratamiento <- function(sloc, entradas) {
                                      labels = c("0-1 km", "1-2 km", "2-3 km", "3-4 km", "4-5 km"))),
       role5_entry = if (length(w5)) "treated" else if (mindist_mm <= R_CTRL_EST) "misma_marca" else "ctrl_b",
       entrante_key        = if (length(trata)) entradas$station_key[cercana] else NA_character_,
+      entrante_marca      = if (length(trata)) entradas$edist[cercana] else NA_character_,
       entrante_autopista  = if (length(trata)) any(entradas$d_autopista[trata] <= AUTOPISTA_M) else NA,
       entrante_semana     = min_o_na(entradas$semana_1[trata])
     )[, c(paste0(rep(c("g_entry_r", "g2_entry_r"), length(RADIOS_EXTRA)), rep(RADIOS_EXTRA, each = 2))) := as.list(do.call(c, extra))][]

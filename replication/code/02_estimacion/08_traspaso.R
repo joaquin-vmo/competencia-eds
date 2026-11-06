@@ -6,13 +6,13 @@
 # de dif_log_reg es la brecha del precio frente a los controles. Se normaliza en la última
 # actualización previa a una fecha de referencia y se promedia por tiempo desde la entrada.
 # Solo tratadas cuya ventana cae entera en el régimen semanal y con todas sus actualizaciones.
-#   Gráfico 11: ventana de 24 semanas antes y 16 después de la entrada registrada, normalizada
+#   Gráfico 12: ventana de 24 semanas antes y 16 después de la entrada registrada, normalizada
 #     ocho semanas antes (la respuesta empieza antes de la entrada registrada).
 #     La brecha total se separa en la parte acumulada el día de actualización y el siguiente
 #     (días 0 y 1) y la del resto de la ventana (días 2 a 6).
 #   Gráfico B.4: ventana de un año en bloques de cuatro semanas, con la entrada registrada o
 #     adelantada uno y dos meses; cada panel se normaliza antes de su propia fecha.
-#   Tabla C.12: traspaso frente a cambio de nivel, misma muestra del Gráfico 11. MCO de la
+#   Tabla C.12: traspaso frente a cambio de nivel, misma muestra del Gráfico 12. MCO de la
 #     diferencia con los controles en cada actualización sobre Post (desde la entrada), Pre (las
 #     ocho semanas previas), el cambio del costo en % del precio previo de la tratada y sus
 #     interacciones, por separado en alzas y bajas del costo; errores agrupados por tratada.
@@ -21,7 +21,7 @@
 #     mayor caída relativa a los controles.
 #
 # Entrada: data/processed/traspaso_actualizaciones.csv
-# Salida:  outputs/grafico_11_traspaso_acumulado.pdf, outputs/grafico_B04_traspaso_adelantos.pdf,
+# Salida:  outputs/grafico_12_traspaso_acumulado.pdf, outputs/grafico_B04_traspaso_adelantos.pdf,
 #          outputs/tabla_C12_traspaso_nivel.tex, outputs/grafico_B10_brecha_estaciones.pdf
 
 source(here::here("code", "00_configuracion.R"))
@@ -50,7 +50,7 @@ etiquetas <- function(marcas) {
   parse(text = e)
 }
 
-# ---- Gráfico 11 ----
+# ---- Gráfico 12 ----
 
 ADELANTO <- 8L                                  # semanas: normalización dos meses antes de la entrada
 LO <- -(9L + ADELANTO); HI <- 9L                # extremos agrupados en <= LO y >= HI
@@ -60,7 +60,7 @@ res <- rbindlist(lapply(names(PARTES), function(col) {
   x[, k := pmin(pmax(t, LO), HI)]
   x[, .(est = mean(C), se = ee(C), n = uniqueN(station_key)), by = k][, parte := factor(PARTES[[col]], levels = PARTES)]
 }))
-message(sprintf("Gráfico 11: %d tratadas", uniqueN(brecha(td$k, -(16L + ADELANTO), 16L, -ADELANTO)$station_key)))
+message(sprintf("Gráfico 12: %d tratadas", uniqueN(brecha(td$k, -(16L + ADELANTO), 16L, -ADELANTO)$station_key)))
 print(dcast(res, k ~ parte, value.var = c("est", "se"))[, lapply(.SD, round, 3)], nrows = Inf)   # cifras que cita el texto
 
 marcas <- c(LO, seq(LO + 2L + (-(LO + 2L)) %% 3L, HI - 2L, by = 3), HI)
@@ -72,7 +72,7 @@ fig <- ggplot(res, aes(k, est, colour = parte, shape = parte)) +
                   position = position_dodge(width = 0.6)) +
   scale_x_continuous(breaks = marcas, labels = etiquetas(marcas)) +
   labs(x = "Semanas desde la entrada registrada", y = "Brecha acumulada (%)", colour = NULL, shape = NULL)
-guardar(fig, "grafico_11_traspaso_acumulado.pdf", alto = 3.4)
+guardar(fig, "grafico_12_traspaso_acumulado.pdf", alto = 3.4)
 
 # ---- Tabla C.12: traspaso frente a cambio de nivel ----
 

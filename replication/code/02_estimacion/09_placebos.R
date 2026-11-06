@@ -1,7 +1,7 @@
 # 09_placebos.R
 #
 # Placebos y fechado de la entrada, ventana 2012_2026, especificación principal.
-#   Gráfico 12: entrada fechada un período (seis meses) antes de la registrada, en meses,
+#   Gráfico 13: entrada fechada un período (seis meses) antes de la registrada, en meses,
 #     con referencia en el mes previo a la entrada adelantada.
 #   Gráfico B.5: estudio de eventos con la entrada registrada y fechada dos meses antes.
 #   Tabla C.8: fechas de entrada falsas en el grupo de control. Cada réplica sortea la
@@ -10,7 +10,7 @@
 #     estático. Sobre todo el grupo y sobre su mitad más densa (vecinas a <= 2 km).
 #
 # Entrada: data/processed/panel_2012_2026/panel_mensual.csv
-# Salida:  outputs/grafico_12_placebo_adelanto.pdf, outputs/grafico_B05_es_adelanto_2meses.pdf,
+# Salida:  outputs/grafico_13_placebo_adelanto.pdf, outputs/grafico_B05_es_adelanto_2meses.pdf,
 #          outputs/tabla_C08_placebo_controles.tex
 
 source(here::here("code", "00_configuracion.R"))
@@ -20,7 +20,7 @@ panel <- leer_panel("2012_2026")
 d <- muestra_estacion(panel, CTRL_ESTRICTO, VENTANAS[["2012_2026"]]$focal)
 
 # ==============================================================================
-# Gráfico 12: entrada adelantada seis meses, resolución mensual
+# Gráfico 13: entrada adelantada seis meses, resolución mensual
 # ==============================================================================
 
 DELTA <- BIN_M          # meses que se adelanta la entrada: un período
@@ -42,7 +42,7 @@ fig <- ggplot(res, aes(mes, estimate)) +
   scale_linetype_manual(values = c("dotted", "dashed")) +
   labs(x = "Meses desde la entrada registrada", y = "Efecto sobre el precio (%)", linetype = NULL)
 print(res[, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)], nrows = Inf)   # cifras que cita el texto
-guardar(fig, "grafico_12_placebo_adelanto.pdf", alto = 3.4)
+guardar(fig, "grafico_13_placebo_adelanto.pdf", alto = 3.4)
 
 # ==============================================================================
 # Gráfico B.5: entrada registrada y adelantada dos meses

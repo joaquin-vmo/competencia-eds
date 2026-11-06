@@ -3,8 +3,8 @@
 # Dos piezas del mecanismo, gasolina 93, muestra principal (tratadas a <= 2 km, controles estrictos).
 #   1. Cambios de precio por tipo de día (04_cambios_precio.R) en el panel mensual: suma de los
 #      cambios ($/L) en el día de actualización o el siguiente y en los demás días, estudio de
-#      eventos mensual con la especificación principal. Régimen semanal, tratadas del Gráfico 11.
-#      Complementa la descomposición del Gráfico 11 con otra medición (solo log).
+#      eventos mensual con la especificación principal. Régimen semanal, tratadas del Gráfico 12.
+#      Complementa la descomposición del Gráfico 12 con otra medición (solo log).
 #   2. Convergencia al precio de la entrante (Tabla C.13). Desvíos de la media nacional ($/L):
 #      cambio de la incumbente entre los meses -6 a -1 y 6 a 12 desde la entrada, sobre su propio
 #      desvío previo (reversión a la media) y el de la entrante en los meses 0 y 1. Los controles

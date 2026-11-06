@@ -83,9 +83,9 @@ en su encabezado.
 | `04_atenuacion.R` | Gráfico 6; Tablas 6 (ATT por radio) y C.11 (equivalencia) |
 | `05_comovimiento.R` | Gráficos 7, B.9 y B.11 |
 | `06_distribucion.R` | Gráfico 8 |
-| `07_ventanas.R` | Gráficos 9 y 10; Tablas C.9 y C.10 |
-| `08_traspaso.R` | Gráficos 11, B.4 y B.10; Tabla C.12 |
-| `09_placebos.R` | Gráficos 12 y B.5; Tabla C.8 |
+| `07_ventanas.R` | Gráficos 10 y 11; Tablas C.9 y C.10 |
+| `08_traspaso.R` | Gráficos 12, B.4 y B.10; Tabla C.12 |
+| `09_placebos.R` | Gráficos 13 y B.5; Tabla C.8 |
 | `10_persistencia.R` | Gráfico B.3 |
 | `11_autopista.R` | Gráfico B.6; Tabla C.6 |
 | `12_errores_conley.R` | Gráfico B.7 |
@@ -93,6 +93,7 @@ en su encabezado.
 | `14_honest_did.R` | Tabla C.7 |
 | `15_validacion_margen.R` | Tabla C.2 |
 | `16_mecanismo.R` | Tabla C.13 |
+| `17_tipo_entrante.R` | Tabla 7; Gráficos 9, B.12, B.13 y B.14 |
 
 El Gráfico 3 (esquema de la base) y la Tabla 2 (descripción de las variables) están escritos
 directamente en LaTeX y no tienen código.

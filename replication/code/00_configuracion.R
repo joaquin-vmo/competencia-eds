@@ -36,6 +36,7 @@ R_TRATADA  <- 2   # km: tratada si hubo una entrada competidora a <= 2 km
 R_CTRL_AMP <- 3   # km: control amplio, nunca una entrada a <= 3 km
 R_CTRL_EST <- 5   # km: control estricto, nunca una entrada a <= 5 km
 RADIOS_EXTRA <- c(1, 3)   # km: radios adicionales de tratamiento (el de 2 y el de 5 ya existen)
+MARCAS_MAYORES <- c("copec", "shell", "enex", "aramco_petrobras")   # entrante independiente: ninguna de estas
 AUTOPISTA_M <- 100   # m: estación de autopista si está a <= 100 m de la red vial clase 1
 
 REFORMA_MEPCO <- as.IDate("2023-01-26")   # primera actualización trisemanal del costo (ley 21.537)

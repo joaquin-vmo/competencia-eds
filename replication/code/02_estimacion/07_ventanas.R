@@ -4,14 +4,14 @@
 # pandemia, TWFE y Sun y Abraham (2021) con la misma muestra, efectos fijos y bins.
 #
 # Entrada: data/processed/panel_<ventana>/panel_mensual.csv
-# Salida:  outputs/grafico_09_ventana_2014_2019.pdf, outputs/grafico_10_ventana_2021_2026.pdf,
+# Salida:  outputs/grafico_10_ventana_2014_2019.pdf, outputs/grafico_11_ventana_2021_2026.pdf,
 #          outputs/tabla_C09_ventana_2014_2019.tex, outputs/tabla_C10_ventana_2021_2026.tex
 
 source(here::here("code", "00_configuracion.R"))
 library(fixest)
 
-SALIDAS <- list("2014_2019" = c(grafico = "grafico_09_ventana_2014_2019.pdf", tabla = "tabla_C09_ventana_2014_2019.tex"),
-                "2021_2026" = c(grafico = "grafico_10_ventana_2021_2026.pdf", tabla = "tabla_C10_ventana_2021_2026.tex"))
+SALIDAS <- list("2014_2019" = c(grafico = "grafico_10_ventana_2014_2019.pdf", tabla = "tabla_C09_ventana_2014_2019.tex"),
+                "2021_2026" = c(grafico = "grafico_11_ventana_2021_2026.pdf", tabla = "tabla_C10_ventana_2021_2026.tex"))
 ESTIMADORES <- c("TWFE", "Sun y Abraham")
 
 for (ventana in names(SALIDAS)) {
