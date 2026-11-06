@@ -12,12 +12,22 @@ Rscript -e 'renv::restore()'   # una vez: instala las versiones de renv.lock
 Rscript run_all.R              # todo; también: run_all.R construccion | estimacion
 ```
 
-Tiempo total: **12 minutos** en un Mac con Apple M1 y 8 GB de RAM (construcción
-1,5 min, estimación 10,5 min). El tiempo por script queda en `logs/tiempos.csv` y
+Tiempo total: **15 minutos** en un Mac con Apple M1 y 8 GB de RAM (construcción
+1,7 min, estimación 12,7 min). El tiempo por script queda en `logs/tiempos.csv` y
 la salida de cada uno en `logs/<script>.log`; las cifras que citan las notas de los gráficos
 (número de tratadas, controles y cambios de precio) se imprimen ahí.
 
-Requisitos: R 4.6.2 y las bibliotecas de sistema GDAL, GEOS y PROJ (para `sf`).
+Requisitos: R 4.6.2 y las bibliotecas de sistema GDAL, GEOS y PROJ (para `sf`). `run_all.R` sube el
+tope de memoria virtual de R a 32 GB (`R_MAX_VSIZE`), que necesita Sun y Abraham en el panel semanal.
+Las figuras se guardan con las fuentes incrustadas (`quartz` en macOS, `cairo_pdf` en otros sistemas),
+y tablas y ejes usan coma decimal.
+
+Después de correr, copiar `replication/outputs/*.pdf` a `tex/output/graficos/` y `*.tex` a
+`tex/output/tablas/`:
+
+```sh
+cp replication/outputs/*.pdf tex/output/graficos/ && cp replication/outputs/*.tex tex/output/tablas/
+```
 
 ## Estructura
 
@@ -69,12 +79,12 @@ en su encabezado.
 |---|---|
 | `01_descriptivos.R` | Gráficos 1, 2, B.1 y B.2; Tabla 1 |
 | `02_muestra.R` | Gráfico 4; Tablas 3 y C.1 |
-| `03_es_principal.R` | Gráfico 5; Tablas 4, C.3 a C.5 |
-| `04_atenuacion.R` | Gráfico 6 |
-| `05_comovimiento.R` | Gráficos 7 y B.9 |
+| `03_es_principal.R` | Gráfico 5; Tablas 4, 5 (número principal y % del margen), C.3 a C.5 |
+| `04_atenuacion.R` | Gráfico 6; Tablas 6 (ATT por radio) y C.11 (equivalencia) |
+| `05_comovimiento.R` | Gráficos 7, B.9 y B.11 |
 | `06_distribucion.R` | Gráfico 8 |
 | `07_ventanas.R` | Gráficos 9 y 10; Tablas C.9 y C.10 |
-| `08_traspaso.R` | Gráficos 11 y B.4 |
+| `08_traspaso.R` | Gráficos 11, B.4 y B.10; Tabla C.12 |
 | `09_placebos.R` | Gráficos 12 y B.5; Tabla C.8 |
 | `10_persistencia.R` | Gráfico B.3 |
 | `11_autopista.R` | Gráfico B.6; Tabla C.6 |
@@ -82,6 +92,7 @@ en su encabezado.
 | `13_panel_semanal.R` | Gráfico B.8 |
 | `14_honest_did.R` | Tabla C.7 |
 | `15_validacion_margen.R` | Tabla C.2 |
+| `16_mecanismo.R` | Tabla C.13 |
 
 El Gráfico 3 (esquema de la base) y la Tabla 2 (descripción de las variables) están escritos
 directamente en LaTeX y no tienen código.

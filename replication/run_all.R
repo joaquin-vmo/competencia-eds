@@ -28,7 +28,10 @@ for (s in scripts) {
   log <- file.path(raiz, "logs", sub("\\.R$", ".log", basename(s)))
   message(sprintf("%s  %-40s", format(Sys.time(), "%H:%M:%S"), nombre), appendLF = FALSE)
   t0 <- Sys.time()
-  estado <- system2(file.path(R.home("bin"), "Rscript"), shQuote(s), stdout = log, stderr = log)
+  # R_MAX_VSIZE: Sun y Abraham en el panel semanal (13_panel_semanal.R) supera el tope de 16 GB de
+  # memoria virtual que R fija por defecto en macOS; con 8 GB de RAM el sistema usa memoria comprimida
+  estado <- system2(file.path(R.home("bin"), "Rscript"), shQuote(s), stdout = log, stderr = log,
+                    env = "R_MAX_VSIZE=32Gb")
   seg <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
   message(sprintf(" %7.1f s", seg))
   if (estado != 0) stop(nombre, " terminó con error; ver ", log)

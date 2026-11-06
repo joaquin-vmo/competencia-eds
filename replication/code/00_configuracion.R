@@ -35,6 +35,7 @@ RADIO_MISMO_LOCAL_M <- 50            # un código nuevo a menos de 50 m de uno a
 R_TRATADA  <- 2   # km: tratada si hubo una entrada competidora a <= 2 km
 R_CTRL_AMP <- 3   # km: control amplio, nunca una entrada a <= 3 km
 R_CTRL_EST <- 5   # km: control estricto, nunca una entrada a <= 5 km
+RADIOS_EXTRA <- c(1, 3)   # km: radios adicionales de tratamiento (el de 2 y el de 5 ya existen)
 AUTOPISTA_M <- 100   # m: estación de autopista si está a <= 100 m de la red vial clase 1
 
 REFORMA_MEPCO <- as.IDate("2023-01-26")   # primera actualización trisemanal del costo (ley 21.537)
@@ -78,6 +79,19 @@ fixest::setFixest_etable(digits = "r3", fitstat = ~n + r2, digits.stats = 3, flo
 fixest::setFixest_notes(FALSE)
 
 fila <- function(...) paste(paste(c(...), collapse = " & "), "\\\\")
+
+# números en formato español: coma decimal y punto de miles ({,} para que en modo matemático
+# no agregue espacio). Solo toca dígitos a ambos lados del separador.
+a_coma <- function(x) {
+  x <- gsub("(?<=\\d),(?=\\d{3}(?!\\d))", "\001", x, perl = TRUE)
+  x <- gsub("(?<=\\d)\\.(?=\\d)", "{,}", x, perl = TRUE)
+  gsub("\001", ".", x, fixed = TRUE)
+}
+stopifnot(a_coma("-0.296$^{***}$ & 124,434 & [-0.2; 1.5] & 2021") == "-0{,}296$^{***}$ & 124.434 & [-0{,}2; 1{,}5] & 2021")
+
+# etable de fixest a un .tex, con los números en formato español
+# (do.call: etable evalúa sus argumentos en su propio marco y no acepta que lleguen por `...`)
+etable_tex <- function(..., archivo) writeLines(a_coma(do.call(fixest::etable, c(list(...), tex = TRUE))), ruta_out(archivo))
 estrellas <- function(p) fifelse(p < 0.01, "$^{***}$", fifelse(p < 0.05, "$^{**}$", fifelse(p < 0.10, "$^{*}$", "")))
 
 # coeficiente con estrellas y, en la fila siguiente, su error estándar entre paréntesis
@@ -87,8 +101,8 @@ filas_coef <- function(nombre, est, se, p, dig = 3) {
 
 # tabular booktabs; `cuerpo`: líneas entre \toprule y \bottomrule
 escribir_tabla <- function(columnas, cuerpo, archivo) {
-  writeLines(c(sprintf("\\begin{tabular}{%s}", columnas), "\\toprule", cuerpo,
-               "\\bottomrule", "\\end{tabular}"), ruta_out(archivo))
+  writeLines(a_coma(c(sprintf("\\begin{tabular}{%s}", columnas), "\\toprule", cuerpo,
+                      "\\bottomrule", "\\end{tabular}")), ruta_out(archivo))
 }
 
 # ==============================================================================
@@ -113,8 +127,15 @@ for (g in c("pointrange", "point", "line", "errorbar")) update_geom_defaults(g, 
 for (g in c("col", "bar", "ribbon")) update_geom_defaults(g, list(fill = COLORES[1]))
 
 ANCHO_FIG <- 5   # pulgadas; la tesis incluye las figuras a tamaño natural, así la letra mide igual en todas
+# PDF con las fuentes incrustadas y el signo menos dibujado (el dispositivo pdf() no incrusta
+# Helvetica ni Symbol). En macOS, quartz; cairo_pdf ahí requiere XQuartz. En el resto, cairo_pdf.
+DISPOSITIVO_PDF <- if (capabilities("aqua")) {
+  function(filename, ...) grDevices::quartz(type = "pdf", file = filename, ...)
+} else grDevices::cairo_pdf
+# OutDec pone la coma decimal en los ejes
 guardar <- function(fig, archivo, alto, ancho = ANCHO_FIG) {
-  ggsave(ruta_out(archivo), fig, width = ancho, height = alto)
+  withr::with_options(list(OutDec = ","),
+                      ggsave(ruta_out(archivo), fig, width = ancho, height = alto, device = DISPOSITIVO_PDF))
 }
 
 # estudio de eventos (event_time, estimate, se) con IC al 95 %; `serie`: columna que separa series
@@ -183,18 +204,27 @@ CRS_M <- 32719   # WGS84 / UTM 19S, la del shapefile de red vial
 
 leer_panel <- function(ventana, archivo = "panel_mensual.csv", select = NULL) {
   panel <- fread(file.path(dir_ventana(ventana), archivo), select = select)
-  fechas <- intersect(c("ym", "wk", "g_entry", "g2_entry", "g5_entry", "g2_5_entry", "fecha_entrante"), names(panel))
+  fechas <- intersect(c("ym", "wk", "g_entry", "g2_entry", "g5_entry", "g2_5_entry", "fecha_entrante",
+                        paste0(c("g_entry_r", "g2_entry_r"), rep(RADIOS_EXTRA, each = 2))), names(panel))
   panel[, (fechas) := lapply(.SD, as.IDate), .SDcols = fechas]
   panel[, year := year(ym)][]
 }
 
 # Tratadas + controles `roles`, cortada en la segunda entrada, sin cohortes previas a
 # `focal`, solo incumbentes. rel: bin de BIN_M meses (+-NBIN); los controles van en -1.
-# `radio5 = TRUE` usa la asignación a 5 km (primera entrada a <= 5 km, Gráfico 6).
-muestra_estacion <- function(panel, roles, focal, radio5 = FALSE) {
-  g <- if (radio5) "g5_entry" else "g_entry"
-  g2 <- if (radio5) "g2_5_entry" else "g2_entry"
-  rol <- if (radio5) "role5_entry" else "role_entry"
+# `radio`: km de la definición de tratada. 2 es la principal; 5 usa la asignación a 5 km (primera
+# entrada a <= 5 km, Gráfico 6); con RADIOS_EXTRA es tratada la que tuvo una entrada a <= radio
+# y los controles siguen siendo `roles` (el resto queda fuera).
+muestra_estacion <- function(panel, roles, focal, radio = R_TRATADA) {
+  if (radio == R_TRATADA) {
+    g <- "g_entry"; g2 <- "g2_entry"; rol <- "role_entry"
+  } else if (radio == R_CTRL_EST) {
+    g <- "g5_entry"; g2 <- "g2_5_entry"; rol <- "role5_entry"
+  } else {
+    stopifnot(radio %in% RADIOS_EXTRA)
+    g <- paste0("g_entry_r", radio); g2 <- paste0("g2_entry_r", radio); rol <- "rol_radio"
+    panel <- copy(panel)[, rol_radio := fifelse(!is.na(get(g)), "treated", role_entry)]
+  }
   d <- panel[get(rol) %in% c("treated", roles) & (is.na(get(g2)) | ym < get(g2)) & base == TRUE]
   d <- d[!(get(rol) == "treated" & year(get(g)) < focal)]
   d[, `:=`(treated = as.integer(get(rol) == "treated"), g_evento = get(g))]
@@ -229,4 +259,31 @@ tidy_es <- function(m, patron = "rel") {
 n_estaciones <- function(m, d) {
   u <- d[fixest::obs(m)]
   c(uniqueN(u[treated == 1L, station_key]), uniqueN(u[treated == 0L, station_key]))
+}
+
+# comunas (clusters) que usa el modelo
+n_comunas <- function(m, d) uniqueN(d[fixest::obs(m), comuna])
+
+# valor p del test de Wald conjunto de los bins previos a la entrada (-NBIN a -2), con el
+# vcov agrupado del modelo. En Sun y Abraham (`d` = datos de estimación con cohorte y per) el
+# test es sobre los bins agregados: cada bin es el promedio de los coeficientes por cohorte
+# ponderado por las observaciones tratadas de la cohorte en ese bin, los mismos pesos que usa
+# fixest al agregar (se verifica que reproduce sus coeficientes), y su vcov es W V W'.
+p_previos <- function(m, patron = "rel", d = NULL) {
+  if (is.null(d)) {
+    previos <- sprintf("^%s::-[2-%d]($|:)", patron, NBIN)
+    return(sprintf("%.3f", fixest::wald(m, keep = previos, print = FALSE)$p))
+  }
+  b <- m$coefficients
+  k <- as.integer(sub(sprintf("^%s::(-?\\d+):cohort::.*", patron), "\\1", names(b)))
+  coh <- sub(".*:cohort::", "", names(b))
+  u <- d[fixest::obs(m)][treated == 1L, .N, by = .(rel = per - cohorte, cohorte = as.character(cohorte))]
+  n <- u[data.table(rel = k, cohorte = coh), on = .(rel, cohorte), N]
+  bins <- -NBIN:-2
+  W <- t(sapply(bins, function(r) ifelse(k == r, n, 0) / sum(n[k == r])))
+  bb <- drop(W %*% b)
+  stopifnot("la agregación no reproduce a fixest" =
+              isTRUE(all.equal(bb, unname(coef(m)[sprintf("%s::%d", patron, bins)]), tolerance = 1e-8)))
+  F <- drop(t(bb) %*% solve(W %*% m$cov.scaled %*% t(W)) %*% bb) / length(bins)
+  sprintf("%.3f", pf(F, length(bins), n_comunas(m, d) - 1L, lower.tail = FALSE))
 }

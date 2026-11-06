@@ -115,10 +115,13 @@ escribir_tabla("lcccc", c(fila("", "Tratadas", "Controles", "Diferencia", "Valor
                "tabla_03_descriptiva.tex")
 
 # ==============================================================================
-# Tabla C.1: composición de la muestra
+# Tabla C.1: composición de la muestra, paso a paso
 # ==============================================================================
 
-st <- unique(panel[, .(station_key, base, role_entry)])
+st <- panel[, .(base = base[1], role_entry = role_entry[1], g_entry = g_entry[1], g2_entry = g2_entry[1],
+                g5_entry = g5_entry[1], ultimo = max(ym)), by = station_key]
+inc <- st[base == TRUE]
+focal <- inc[role_entry == "treated" & year(g_entry) >= V$focal]
 
 # mismos n que las tablas de resultados: estaciones que usa el modelo, sin singletons
 n_muestra <- function(roles) {
@@ -126,26 +129,41 @@ n_muestra <- function(roles) {
   m <- estimar_es(x, "p93")
   message(sprintf("Tabla C.1: %s observaciones en la 93 con controles %s", format(nobs(m), big.mark = ","),
                   paste(roles, collapse = "+")))
-  n_estaciones(m, x)
+  list(con_precio = c(uniqueN(x[treated == 1L, station_key]), uniqueN(x[treated == 0L, station_key])),
+       modelo = n_estaciones(m, x))
 }
 n_amplio <- n_muestra(CTRL_AMPLIO)
 n_estricto <- n_muestra(CTRL_ESTRICTO)
-stopifnot(n_amplio[1] == n_estricto[1])
+stopifnot(n_amplio$modelo[1] == n_estricto$modelo[1])
+
+# tratadas focales que dejan el panel (13 semanas sin reporte) a 24 meses o menos de la entrada,
+# antes de una segunda entrada y antes del último mes del panel
+FIN_PANEL <- max(panel$ym)
+sale <- focal[ultimo < FIN_PANEL & mi(ultimo) - mi(g_entry) <= 24L & (is.na(g2_entry) | ultimo < g2_entry)]
 
 filas <- list(
   c("Estaciones observadas (2012--2026)", nrow(st)),
-  c("\\quad presentes en 2012 (incumbentes)", st[base == TRUE, .N]),
   c("\\quad entrantes posteriores a 2012", st[base == FALSE, .N]),
+  c("\\quad presentes en 2012 (incumbentes)", nrow(inc)),
   c("Entradas registradas", nrow(entradas)),
   c(sprintf("\\quad cohortes focales (%d en adelante)", V$focal), entradas[year(g) >= V$focal, .N]),
-  c(sprintf("Tratadas (entrada competidora a %d km o menos)", R_TRATADA), st[role_entry == "treated", .N]),
-  c(sprintf("Excluidas (entrada entre %d y %d km)", R_TRATADA, R_CTRL_AMP), st[role_entry == "buffer", .N]),
-  c(sprintf("Control amplio (sin entradas a %d km o menos)", R_CTRL_AMP), st[role_entry %in% CTRL_AMPLIO, .N]),
-  c(sprintf("\\quad control estricto (sin entradas a %d km o menos)", R_CTRL_EST), st[role_entry %in% CTRL_ESTRICTO, .N]),
-  c("Muestra de estimación, gasolina 93", ""),
-  c("\\quad tratadas", n_amplio[1]),
-  c("\\quad control amplio", n_amplio[2]),
-  c("\\quad control estricto", n_estricto[2])
+  c("\\addlinespace\\emph{Incumbentes según la entrada más cercana}", ""),
+  c(sprintf("Tratadas (entrada competidora a %d km o menos)", R_TRATADA), inc[role_entry == "treated", .N]),
+  c("\\quad tratadas solo por entradas de 2013 (fuera)", inc[role_entry == "treated" & year(g_entry) < V$focal, .N]),
+  c(sprintf("\\quad tratadas por una cohorte focal"), nrow(focal)),
+  c("\\quad\\quad con precio de la 93", n_estricto$con_precio[1]),
+  c("\\quad\\quad en la muestra de estimación de la 93", n_estricto$modelo[1]),
+  c(sprintf("Excluidas (entrada entre %d y %d km)", R_TRATADA, R_CTRL_AMP), inc[role_entry == "buffer", .N]),
+  c(sprintf("Excluidas (entrada de su propia marca a %d km o menos)", R_CTRL_AMP), inc[role_entry == "misma_marca", .N]),
+  c(sprintf("Control amplio (sin entradas a %d km o menos)", R_CTRL_AMP), inc[role_entry %in% CTRL_AMPLIO, .N]),
+  c("\\quad en la muestra de estimación de la 93", n_amplio$modelo[2]),
+  c(sprintf("Control estricto (sin entradas a %d km o menos)", R_CTRL_EST), inc[role_entry %in% CTRL_ESTRICTO, .N]),
+  c("\\quad con precio de la 93", n_estricto$con_precio[2]),
+  c("\\quad en la muestra de estimación de la 93", n_estricto$modelo[2]),
+  c("\\addlinespace\\emph{Tratadas por una cohorte focal}", ""),
+  c(sprintf("con una segunda entrada competidora a %d km o menos (se cortan en ella)", R_TRATADA), focal[!is.na(g2_entry), .N]),
+  c(sprintf("con una entrada previa entre %d y %d km", R_TRATADA, R_CTRL_EST), focal[!is.na(g5_entry) & g5_entry < g_entry, .N]),
+  c("que salen del panel a 24 meses o menos de la entrada", nrow(sale))
 )
 escribir_tabla("lr", c(fila("", "N"), "\\midrule", vapply(filas, function(f) fila(f[1], f[2]), "")),
                "tabla_C01_composicion_muestra.tex")

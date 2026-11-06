@@ -49,4 +49,5 @@ res <- rbindlist(lapply(names(FUEL), function(fv) {
         tidy_es(sunab_identificado(x, fml), "rel_sa")[, serie := SERIES[3]])[, combustible := PRECIOS[[fv]]]
 }))
 res[, `:=`(combustible = factor(combustible, levels = PRECIOS), serie = factor(serie, levels = SERIES))]
+print(res[, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)], nrows = Inf)   # cifras que cita el texto
 guardar(grafico_es(res, "serie", dodge = 0.6), "grafico_B08_panel_semanal.pdf", alto = 3.2)

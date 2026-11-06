@@ -57,7 +57,7 @@ cuerpo <- unlist(lapply(names(HORIZONTES), function(h) {
   r <- res[horizonte == h][match(names(PRECIOS), y)]
   c(sprintf("\\multicolumn{5}{l}{\\emph{%s}} \\\\", ETIQUETA[[h]]),
     fila("\\quad Estimador", sprintf("%.3f", r$est)),
-    fila("\\quad IC 95\\%", sprintf("[%.3f, %.3f]", r$lb, r$ub)),
+    fila("\\quad IC 95\\%", sprintf("[%.3f; %.3f]", r$lb, r$ub)),
     fila("\\quad $\\bar{M}$ de quiebre", fmt_quiebre(r$quiebre)))
 }))
 r1 <- res[horizonte == "impacto"][match(names(PRECIOS), y)]

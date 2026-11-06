@@ -40,19 +40,20 @@ res <- lapply(names(PRECIOS), function(fv) {
                             p_autopista = att["post_cerca", 4],
                             trat_resto = uniqueN(u[trat_lejos == 1L, station_key]),
                             trat_autopista = uniqueN(u[trat_cerca == 1L, station_key]),
-                            controles = uniqueN(u[treated == 0L, station_key])))
+                            controles = uniqueN(u[treated == 0L, station_key]), comunas = uniqueN(u$comuna)))
 })
 resumen <- rbindlist(lapply(res, `[[`, "resumen"))
 
-etable(lapply(res, `[[`, "m_dif"), tex = TRUE, headers = unname(PRECIOS), replace = TRUE,
+etable_tex(lapply(res, `[[`, "m_dif"), headers = unname(PRECIOS), replace = TRUE,
        dict = c(post = "Entrada", `post:cerca` = "Entrada $\\times$ autopista"),
        extralines = list(
          `Efecto en autopista` = sprintf("%.3f%s (%.3f)", resumen$att_autopista, estrellas(resumen$p_autopista),
                                          resumen$se_autopista),
          `Tratadas resto` = resumen$trat_resto,
          `Tratadas autopista` = resumen$trat_autopista,
-         Controles = resumen$controles),
-       file = ruta_out("tabla_C06_autopista.tex"))
+         Controles = resumen$controles,
+         Comunas = resumen$comunas),
+       archivo = "tabla_C06_autopista.tex")
 
 es <- rbindlist(lapply(res, `[[`, "es"))
 es[, `:=`(combustible = factor(combustible, levels = PRECIOS), grupo = factor(grupo, levels = GRUPOS))]

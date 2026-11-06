@@ -20,13 +20,16 @@ for (ventana in names(SALIDAS)) {
   res <- lapply(names(PRECIOS), function(fv) {
     x <- d[!is.na(get(fv))]
     tw <- estimar_es(x, fv)
+    sa <- estimar_es(x, fv, "sunab(cohorte, per)")
     list(es = rbind(tidy_es(tw)[, estimador := ESTIMADORES[1]],
-                    tidy_es(estimar_es(x, fv, "sunab(cohorte, per)"), "per")[, estimador := ESTIMADORES[2]])[
+                    tidy_es(sa, "per")[, estimador := ESTIMADORES[2]])[
                       , combustible := PRECIOS[[fv]]],
-         n = c(n_estaciones(tw, x), nobs(tw)))
+         n = c(n_estaciones(tw, x), nobs(tw), n_comunas(tw, x)),
+         p = c(p_previos(tw), p_previos(sa, "per", x)))
   })
   es <- rbindlist(lapply(res, `[[`, "es"))
   n <- sapply(res, `[[`, "n")
+  p_pre <- unlist(lapply(res, `[[`, "p"))
 
   # tabla: filas = bin, columnas = combustible x estimador
   cuerpo <- unlist(lapply(setdiff(-NBIN:NBIN, -1L), function(k) {
@@ -40,7 +43,8 @@ for (ventana in names(SALIDAS)) {
                    fila("", rep(c("TWFE", "SA"), length(PRECIOS))), "\\midrule",
                    cuerpo, "\\midrule",
                    fila("Tratadas", dup(n[1, ])), fila("Controles", dup(n[2, ])),
-                   fila("Observaciones", dup(format(n[3, ], big.mark = ",")))),
+                   fila("Observaciones", dup(format(n[3, ], big.mark = ","))),
+                   fila("Comunas", dup(n[4, ])), fila("Valor $p$ bins previos", p_pre)),
                  SALIDAS[[ventana]][["tabla"]])
 
   es[, `:=`(combustible = factor(combustible, levels = PRECIOS), estimador = factor(estimador, levels = ESTIMADORES))]

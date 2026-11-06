@@ -4,6 +4,9 @@
 # menos su media nacional del mes. Para cada umbral c de una grilla de NC cuantiles,
 # kappa(c) = efecto de la entrada sobre 1[y <= c] con la especificación principal; la
 # distribución sin entrada es la observada de las tratadas después de la entrada menos kappa(c).
+# Los umbrales son cuantiles de la muestra conjunta (tratadas y controles). El log reporta
+# kappa(c) con su error agrupado por comuna (puntual, sin bandas uniformes) en los umbrales
+# más cercanos a los cuantiles 10, 25, 50, 75 y 90.
 #
 # Entrada: data/processed/panel_2012_2026/panel_mensual.csv
 # Salida:  outputs/grafico_08_distribucion_acumulada.pdf
@@ -25,6 +28,12 @@ cdf <- rbindlist(lapply(names(PRECIOS), function(fv) {
   m <- feols(as.formula(sprintf("c(%s) ~ post | %s", paste(ind, collapse = ", "), FE_PRINCIPAL)),
              data = z, cluster = ~comuna)
   kappa <- vapply(seq_along(ind), function(j) coef(m[[j]])[["post"]], numeric(1))
+  se <- vapply(seq_along(ind), function(j) se(m[[j]])[["post"]], numeric(1))
+  q <- seq(0.02, 0.98, length.out = NC)
+  sel <- vapply(c(0.10, 0.25, 0.50, 0.75, 0.90), function(v) which.min(abs(q - v)), integer(1))
+  message(PRECIOS[[fv]], ": kappa (pp) en los cuantiles ", paste(sprintf("%.3f", q[sel]), collapse = "/"), " = ",
+          paste(sprintf("%.1f (%.1f)", 100 * kappa[sel], 100 * se[sel]), collapse = "; "),
+          sprintf("; máximo %.1f en el cuantil %.3f", 100 * max(kappa), q[which.max(kappa)]))
   trat_post <- z[treated == 1L & post == 1L][[y]]
   observada <- vapply(cs, function(cc) mean(trat_post <= cc), numeric(1))
   data.table(combustible = PRECIOS[[fv]], c = cs,

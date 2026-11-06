@@ -26,4 +26,5 @@ res[, `:=`(serie = factor(serie, levels = CONTEOS), muestra = factor(muestra, le
 fig <- grafico_es(res, "muestra", facetas = ~serie, escalas = "fixed",
                   y = sprintf("Cambio en el número de estaciones a %d km", R_TRATADA)) +
   geom_hline(yintercept = 1, linetype = "dashed", colour = COLOR_REF)
+print(res[, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)], nrows = Inf)   # cifras que cita el texto
 guardar(fig, "grafico_B03_persistencia.pdf", alto = 2.4)

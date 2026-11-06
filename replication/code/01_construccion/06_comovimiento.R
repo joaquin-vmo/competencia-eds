@@ -10,6 +10,7 @@
 #        sigue_24: el siguiente cambio de la rival es en la misma dirección y dentro de 24 h,
 #        iguala:   sigue_24 y fija el mismo precio que la líder (+-0,5 $/L).
 #      Solo pares estación-combustible con reporte en todo INI..FIN (panel balanceado).
+#      sgn: dirección del cambio líder (1 alza, -1 baja); marca_i: marca de la líder.
 #
 # Entrada: data/raw/bencina_en_linea/{2023..2026}.csv, data/processed/{identidad_estaciones,costo_mepco}.csv
 # Salida:  data/processed/comovimiento_pares.csv.gz (una fila por cambio líder y rival)
@@ -145,12 +146,15 @@ horas <- as.numeric(difftime(pares$ts_sig, pares$ts0, units = "hours"))
 pares[, sigue_24 := 100 * fcoalesce(!is.na(ts_sig) & horas <= HORAS_RESPUESTA & sgn_sig == sgn, FALSE)]
 pares[, iguala := 100 * fcoalesce(sigue_24 > 0 & abs(p_sig - p_lid) < TOL_IGUALA, FALSE)]
 
-# muestra de la tesis: régimen semanal y semanas 2 y 3 del ciclo trisemanal (sin el traspaso por etapas)
-pares[, muestra := fcase(reg == "sem", "Semanal (2022)", dia_ciclo >= 7L, "Trisemanal, semanas 2 y 3 (2023)")]
+# muestra de la tesis: régimen semanal y semanas 2 y 3 del ciclo trisemanal (sin el traspaso por etapas);
+# la semana 1 del trisemanal se guarda para la robustez
+pares[, muestra := fcase(reg == "sem", "Semanal (2022)", dia_ciclo >= 7L, "Trisemanal, semanas 2 y 3 (2023)",
+                         default = "Trisemanal, semana 1 (2023)")]
+pares[est, on = c(i = "station_key"), marca_i := i.marca]
 stopifnot("un cambio líder o una respuesta cae en jueves o viernes" =
             !any(wday(pares$ts0) %in% 5:6) && !any(wday(pares[sigue_24 > 0, ts_sig]) %in% 5:6))
 
-fwrite(pares[!is.na(muestra), .(ev, i, j, fuel, reg, dia_ciclo, muestra, dist, sigue_24, iguala)],
+fwrite(pares[!is.na(muestra), .(ev, i, j, marca_i, fuel, reg, dia_ciclo, muestra, dist, sgn, sigue_24, iguala)],
        ruta_proc("comovimiento_pares.csv.gz"))
 message(sprintf("06_comovimiento.R: %s cambios líderes, %s pares líder-rival",
                 format(uniqueN(pares$ev), big.mark = ","), format(nrow(pares), big.mark = ",")))

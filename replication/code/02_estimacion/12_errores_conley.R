@@ -20,4 +20,5 @@ res <- rbindlist(lapply(names(PRECIOS), function(fv) {
     , combustible := PRECIOS[[fv]]]
 }))
 res[, `:=`(combustible = factor(combustible, levels = PRECIOS), errores = factor(errores, levels = names(VCOV)))]
+print(res[, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)], nrows = Inf)   # cifras que cita el texto
 guardar(grafico_es(res, "errores", dodge = 0.5), "grafico_B07_conley.pdf", alto = 3.2)

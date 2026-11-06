@@ -156,8 +156,13 @@ inicio_id <- idinfo[, .(fecha_entrante = min(first_date)), by = station_key]   #
 #   marca (expansión de la propia cadena, no un competidor).
 #   g_entry: mes de la primera entrada competidora a <= R_TRATADA; g2_entry: la segunda.
 #   role_entry por la distancia mínima a la que alguna vez hubo una entrada:
-#     treated (<= 2 km), buffer (2 a 3 km), ctrl_a (3 a 5 km), ctrl_b (nunca a <= 5 km).
+#     treated (<= 2 km), buffer (2 a 3 km), misma_marca (no tratada, con una entrada de su propia
+#     marca a <= 3 km: no sirve de control), ctrl_a (alguna entrada, de otra marca o de la propia,
+#     entre 3 y 5 km), ctrl_b (ninguna entrada de ninguna marca a <= 5 km). Así el control amplio
+#     no tiene entradas a <= 3 km y el estricto no tiene entradas a <= 5 km, de ninguna marca.
 #   *5_entry: la misma asignación con radio 5 km (primera entrada y, en el mismo mes, la más cercana).
+#   g_entry_r<k>, g2_entry_r<k> (k en RADIOS_EXTRA): primera y segunda entrada competidora a <= k km,
+#     para usar el radio k como definición de tratada.
 #   entrante_*: las entrantes que tratan a la estación (mes g_entry, <= 2 km, otra marca).
 min_o_na <- function(x) if (all(is.na(x))) NA_integer_ else as.integer(min(x, na.rm = TRUE))
 
@@ -167,7 +172,10 @@ asignar_tratamiento <- function(sloc, entradas) {
   D_ev[cbind(match(entradas$station_key, sloc$station_key), seq_len(nrow(entradas)))] <- Inf
   D_ev[!(outer(mi(sloc$entry_ym), g_ev, "<") & outer(mi(sloc$last_ym), g_ev, ">="))] <- Inf
   misma_marca <- outer(sloc$distribuidor, entradas$edist, "==")
-  D_ev[!is.na(misma_marca) & misma_marca] <- Inf
+  misma_marca <- !is.na(misma_marca) & misma_marca
+  D_mm <- D_ev
+  D_mm[!misma_marca] <- Inf   # solo entradas de la propia marca
+  D_ev[misma_marca] <- Inf
 
   rbindlist(lapply(seq_len(nrow(sloc)), function(i) {
     d <- D_ev[i, ]
@@ -177,6 +185,11 @@ asignar_tratamiento <- function(sloc, entradas) {
     w5 <- w5[order(g_ev[w5], d[w5])]
     meses5 <- unique(g_ev[w5])
     mindist <- round(min(d), 3)
+    mindist_mm <- min(D_mm[i, ])
+    extra <- lapply(RADIOS_EXTRA, function(r) {
+      m <- sort(unique(g_ev[d <= r]))
+      mi2date(c(if (length(m)) m[1] else NA_integer_, if (length(m) >= 2) m[2] else NA_integer_))
+    })
     trata <- if (is.na(g)) integer(0) else which(d <= R_TRATADA & g_ev == g)
     cercana <- trata[which.min(d[trata])]
     data.table(
@@ -185,18 +198,19 @@ asignar_tratamiento <- function(sloc, entradas) {
       g_entry     = mi2date(g),
       g2_entry    = mi2date(if (length(meses) >= 2) meses[2] else NA_integer_),
       role_entry  = fcase(!is.na(g), "treated", mindist <= R_CTRL_AMP, "buffer",
-                          mindist <= R_CTRL_EST, "ctrl_a", default = "ctrl_b"),
+                          mindist_mm <= R_CTRL_AMP, "misma_marca",
+                          pmin(mindist, mindist_mm) <= R_CTRL_EST, "ctrl_a", default = "ctrl_b"),
       dist_entry  = if (is.na(g)) NA_real_ else round(min(d[trata]), 3),
       g5_entry    = mi2date(if (length(w5)) meses5[1] else NA_integer_),
       g2_5_entry  = mi2date(if (length(meses5) >= 2) meses5[2] else NA_integer_),
       dist_entry5 = if (length(w5)) round(d[w5[1]], 3) else NA_real_,
       ring_entry  = as.character(cut(if (length(w5)) d[w5[1]] else NA_real_, breaks = 0:5, include.lowest = TRUE,
                                      labels = c("0-1 km", "1-2 km", "2-3 km", "3-4 km", "4-5 km"))),
-      role5_entry = if (length(w5)) "treated" else "ctrl_b",
+      role5_entry = if (length(w5)) "treated" else if (mindist_mm <= R_CTRL_EST) "misma_marca" else "ctrl_b",
       entrante_key        = if (length(trata)) entradas$station_key[cercana] else NA_character_,
       entrante_autopista  = if (length(trata)) any(entradas$d_autopista[trata] <= AUTOPISTA_M) else NA,
       entrante_semana     = min_o_na(entradas$semana_1[trata])
-    )
+    )[, c(paste0(rep(c("g_entry_r", "g2_entry_r"), length(RADIOS_EXTRA)), rep(RADIOS_EXTRA, each = 2))) := as.list(do.call(c, extra))][]
   }))
 }
 

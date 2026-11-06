@@ -41,6 +41,7 @@ fig <- ggplot(res, aes(mes, estimate)) +
   scale_x_continuous(breaks = seq(-NB_M, NB_M, BIN_M)) +
   scale_linetype_manual(values = c("dotted", "dashed")) +
   labs(x = "Meses desde la entrada registrada", y = "Efecto sobre el precio (%)", linetype = NULL)
+print(res[, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)], nrows = Inf)   # cifras que cita el texto
 guardar(fig, "grafico_12_placebo_adelanto.pdf", alto = 3.4)
 
 # ==============================================================================
@@ -57,6 +58,7 @@ res <- rbindlist(lapply(names(PRECIOS), function(fv) {
     , combustible := PRECIOS[[fv]]]
 }))
 res[, `:=`(combustible = factor(combustible, levels = PRECIOS), fecha = factor(fecha, levels = FECHAS))]
+print(res[, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)], nrows = Inf)   # cifras que cita el texto
 guardar(grafico_es(res, "fecha"), "grafico_B05_es_adelanto_2meses.pdf", alto = 3.6)
 
 # ==============================================================================
