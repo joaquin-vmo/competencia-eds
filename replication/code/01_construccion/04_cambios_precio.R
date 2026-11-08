@@ -4,7 +4,8 @@
 # La ley obliga a informar cada cambio: un cambio es un día cuyo último precio difiere del
 # último precio reportado antes. Tipo de día:
 #   - día de actualización (el jueves en que cambia el costo MEPCO) o el siguiente,
-#   - jueves sin cambio de costo (solo existe en el régimen trisemanal) o el siguiente,
+#   - jueves sin cambio de costo o el siguiente (casi solo en el régimen trisemanal; en el semanal, las
+#     pocas semanas sin cambio de costo: 88 cambios),
 #   - otro día.
 #
 # Entrada: data/processed/{precios,costo_mepco}.csv
@@ -15,6 +16,8 @@ source(here::here("code", "00_configuracion.R"))
 DESDE <- as.IDate("2015-01-01")
 HASTA <- as.IDate("2025-12-31")
 
+# ---- Cambios de precio diarios ----
+
 p <- fread(ruta_proc("precios.csv"), select = c("id", "price", "date", "time", "fuel"),
            colClasses = list(character = c("id", "fuel"), IDate = "date"))[fuel %in% c("93", "di")]
 p[, time := as.ITime(time)]
@@ -22,6 +25,8 @@ setorder(p, id, fuel, date, time, na.last = TRUE)
 p <- unique(p, by = c("id", "fuel", "date"), fromLast = TRUE)   # último precio del día
 p[, dp := price - shift(price), by = .(id, fuel)]
 cambios <- p[!is.na(dp) & dp != 0 & date >= DESDE & date <= HASTA, .(id, fuel, date, dp)]
+
+# ---- Clasificación según el calendario del MEPCO ----
 
 costo <- fread(ruta_proc("costo_mepco.csv"))[, .(date = as.IDate(date), c93 = `93_w/`, cdi = `di_w/`)]
 setorder(costo, date)

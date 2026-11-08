@@ -7,6 +7,7 @@
 #   Tabla 3: medias de tratadas y controles estrictos en 2013 (el año previo a la primera
 #     cohorte), una observación por estación; la diferencia con errores agrupados por comuna.
 #   Tabla C.1: estaciones por rol y muestra de estimación de la 93.
+#   Log (Sección 3): entradas desde 2014 por tipo de entrante y región de las independientes.
 #
 # Entrada: data/processed/panel_2012_2026/{panel_mensual,entradas}.csv, data/raw/mapas/comunas
 # Salida:  outputs/grafico_04_caso_entrada.pdf, outputs/tabla_03_descriptiva.tex,
@@ -72,7 +73,7 @@ fig <- ggplot() +
   scale_shape_manual(values = FORMA_GRUPO, drop = FALSE) +
   coord_sf(xlim = caja[c("xmin", "xmax")], ylim = caja[c("ymin", "ymax")], datum = NA) +
   labs(x = NULL, y = NULL, colour = NULL, shape = NULL) +
-  theme_void(base_size = 10) +
+  theme_void(base_size = 10, base_family = FUENTE) +
   theme(legend.position = "bottom") +
   guides(colour = guide_legend(ncol = 2), shape = guide_legend(ncol = 2))
 guardar(fig, "grafico_04_caso_entrada.pdf", alto = 4.6, ancho = 4.2)
@@ -149,7 +150,7 @@ filas <- list(
   c(sprintf("\\quad cohortes focales (%d en adelante)", V$focal), entradas[year(g) >= V$focal, .N]),
   c("\\addlinespace\\emph{Incumbentes según la entrada más cercana}", ""),
   c(sprintf("Tratadas (entrada competidora a %d km o menos)", R_TRATADA), inc[role_entry == "treated", .N]),
-  c("\\quad tratadas solo por entradas de 2013 (fuera)", inc[role_entry == "treated" & year(g_entry) < V$focal, .N]),
+  c("\\quad con su primera entrada a 2 km o menos en 2013 (fuera)", inc[role_entry == "treated" & year(g_entry) < V$focal, .N]),
   c(sprintf("\\quad tratadas por una cohorte focal"), nrow(focal)),
   c("\\quad\\quad con precio de la 93", n_estricto$con_precio[1]),
   c("\\quad\\quad en la muestra de estimación de la 93", n_estricto$modelo[1]),
@@ -167,3 +168,15 @@ filas <- list(
 )
 escribir_tabla("lr", c(fila("", "N"), "\\midrule", vapply(filas, function(f) fila(f[1], f[2]), "")),
                "tabla_C01_composicion_muestra.tex")
+
+# ==============================================================================
+# Log (Sección 3): entradas desde 2014 por tipo de entrante
+# ==============================================================================
+
+ent14 <- entradas[year(g) >= V$focal]
+ent14[, tipo := fifelse(edist %in% MARCAS_MAYORES, "de marca", fifelse(edist == "sin bandera", "sin bandera", "marca pequeña"))]
+message(sprintf("Entradas desde %d: %d; %s; %d marcas pequeñas distintas", V$focal, nrow(ent14),
+                paste(ent14[, .N, by = tipo][, sprintf("%s %d", tipo, N)], collapse = ", "), ent14[tipo == "marca pequeña", uniqueN(edist)]))
+message("Proporción independiente por período: ", paste(ent14[, .(p = mean(tipo != "de marca")), keyby = .(per = year(g) <= 2019L)][
+  , sprintf("%s %.2f", fifelse(per, "2014-2019", "2020-2026"), p)], collapse = ", "))
+print(ent14[tipo != "de marca", .N, by = eregion][order(-N)])

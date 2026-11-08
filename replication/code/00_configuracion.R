@@ -37,6 +37,7 @@ R_CTRL_AMP <- 3   # km: control amplio, nunca una entrada a <= 3 km
 R_CTRL_EST <- 5   # km: control estricto, nunca una entrada a <= 5 km
 RADIOS_EXTRA <- c(1, 3)   # km: radios adicionales de tratamiento (el de 2 y el de 5 ya existen)
 MARCAS_MAYORES <- c("copec", "shell", "enex", "aramco_petrobras")   # entrante independiente: ninguna de estas
+marca_red <- function(x) fifelse(x %in% "enex", "shell", x)   # Enex opera la red Shell: para "misma marca" son una
 AUTOPISTA_M <- 100   # m: estación de autopista si está a <= 100 m de la red vial clase 1
 
 REFORMA_MEPCO <- as.IDate("2023-01-26")   # primera actualización trisemanal del costo (ley 21.537)
@@ -70,6 +71,8 @@ PRECIOS <- c(p93 = "Gasolina 93", p95 = "Gasolina 95", p97 = "Gasolina 97", pdi 
 DICT <- c(setNames(c(sprintf("$\\leq -%d$", NBIN), sprintf("$%d$", -(NBIN - 1):(NBIN - 1)),
                      sprintf("$\\geq %d$", NBIN)),
                    sprintf("rel::%d:treated", -NBIN:NBIN)),
+          setNames(c(sprintf("$\\leq -%d$", NBIN), sprintf("$%d$", -(NBIN - 1):(NBIN - 1)), sprintf("$\\geq %d$", NBIN)),
+                   sprintf("per::%d", -NBIN:NBIN)),
           treated = "Tratada", n = "Observaciones", ym = "Mes", station_key = "Estación",
           `region^year` = "Región $\\times$ año", `distribuidor^year` = "Marca $\\times$ año")
 
@@ -118,7 +121,12 @@ FORMAS  <- c(16, 17, 15, 4)                                   # círculo, trián
 LINEAS  <- c("solid", "dashed", "dotted", "dotdash")
 COLOR_REF <- "grey40"                                         # líneas de referencia (entrada, cero)
 
-theme_set(theme_bw(base_size = 10) +
+# TeX Gyre Pagella: la letra en que se basa newpxtext, la de la tesis. Se toma de TeX Live
+# (fonts/opentype/public/tex-gyre/texgyrepagella-*.otf) y debe estar instalada en el sistema;
+# en macOS, copiada a ~/Library/Fonts. Si falta, el dispositivo usa otra letra sin avisar.
+FUENTE <- "TeX Gyre Pagella"
+
+theme_set(theme_bw(base_size = 10, base_family = FUENTE) +
             theme(legend.position = "bottom",
                   strip.background = element_rect(fill = "grey95"),
                   palette.colour.discrete = COLORES, palette.fill.discrete = COLORES,
@@ -240,13 +248,69 @@ estimar_es <- function(data, y, rhs = "i(rel, treated, ref = -1)", ...) {
 }
 
 # sunab() no acepta bins: se le pasa per = cohorte + rel, de modo que per - cohorte = bin.
-# Las no tratadas llevan una cohorte fuera del rango de meses: sunab() las trata como nunca tratadas.
+# Las no tratadas llevan una cohorte fuera del rango de per: sunab() las trata como nunca tratadas.
+# Cohorte anual, no mensual: con cohortes mensuales hay unos 750 coeficientes para 259 comunas y casi la
+# mitad de las celdas cohorte x bin está en una sola comuna, lo que subestima el error agrupado por comuna
+# (entre 0,58 y 0,78 veces el de TWFE por bin); con cohortes anuales queda entre 0,88 y 1,07.
+# `grupo`: columna entera 0, 1, ... de las tratadas; la cohorte lleva el grupo en las decenas de miles
+# (cohorte = año + 10000 x grupo), así una sola regresión estima los efectos de cada grupo con los mismos
+# efectos fijos y controles, y agregar_sa() los separa.
 COHORTE_NUNCA <- 99999L
-cohortes_sunab <- function(d) {
-  d[, cohorte := fifelse(treated == 1L, mi(g_evento), COHORTE_NUNCA)]
+GRUPO_SA <- 10000L
+cohortes_sunab <- function(d, grupo = NULL) {
+  g <- if (is.null(grupo)) 0L else d[[grupo]]
+  stopifnot("grupo fuera de rango" = is.null(grupo) || all(d[treated == 1L][[grupo]] %in% 0:9))
+  d[, cohorte := fifelse(treated == 1L, year(g_evento) + GRUPO_SA * g, COHORTE_NUNCA)]
   d[, per := fifelse(treated == 1L, cohorte + rel, miym)][]
 }
+estimar_sa <- function(data, y, ...) estimar_es(data, y, "sunab(cohorte, per)", ...)
 
+# Agregación de Sun y Abraham: cada efecto es el promedio de los coeficientes por cohorte ponderado
+# por las observaciones tratadas de la cohorte en ese bin, los pesos que usa fixest (se verifica que
+# los reproduce), y su varianza es w' V w con el vcov agrupado del modelo (`m` puede venir de summary()
+# con otro vcov). `d`: datos de estimación con cohorte y per.
+pesos_sa <- function(m, d) {
+  nm <- names(m$coefficients)
+  k <- suppressWarnings(as.integer(sub("^per::(-?\\d+):cohort::.*", "\\1", nm)))   # NA: otros regresores
+  coh <- as.integer(sub(".*:cohort::", "", nm))
+  u <- d[fixest::obs(m)][treated == 1L, .N, by = .(k = per - cohorte, coh = cohorte)]
+  celdas <- data.table(k = k, coh = coh)   # fuera de u[...]: dentro, k y coh serían columnas de u
+  p <- data.table(k = k, grupo = coh %/% GRUPO_SA, n = u[celdas, on = .(k, coh), N])
+  p[is.na(k), `:=`(k = NA_integer_, grupo = -1L, n = 0L)][]   # otros regresores (p. ej. treated): peso 0
+}
+# filas de W: combinaciones de los coeficientes por cohorte; `sel` elige los de cada fila
+w_sa <- function(p, sel) { w <- ifelse(sel %in% TRUE, p$n, 0); w / sum(w) }
+comb_sa <- function(m, d, W) {
+  W <- rbind(W)
+  b <- drop(W %*% m$coefficients)
+  V <- W %*% m$cov.scaled %*% t(W)
+  list(b = b, V = V, se = sqrt(diag(V)), gl = n_comunas(m, d) - 1L)
+}
+# bins (-NBIN a NBIN, sin -1) por grupo, con la referencia en cero
+agregar_sa <- function(m, d) {
+  p <- pesos_sa(m, d)
+  cel <- unique(p[grupo >= 0L, .(grupo, k)])[k != -1L][order(grupo, k)]
+  r <- comb_sa(m, d, t(mapply(function(g, kk) w_sa(p, p$grupo == g & p$k == kk), cel$grupo, cel$k)))
+  if (uniqueN(cel$grupo) == 1L)
+    stopifnot("la agregación no reproduce a fixest" =
+                isTRUE(all.equal(unname(r$b), unname(coef(m)[sprintf("per::%d", cel$k)]), tolerance = 1e-8)))
+  out <- cel[, .(grupo, event_time = k, estimate = r$b, se = r$se, p = 2 * pt(-abs(r$b / r$se), r$gl))]
+  setorder(rbind(out, data.table(grupo = unique(cel$grupo), event_time = -1L, estimate = 0, se = 0, p = NA_real_)),
+           grupo, event_time)[]
+}
+# ATT (bins >= 0) de cada grupo y, si hay dos o más, la diferencia de cada uno con el grupo 0
+att_sa <- function(m, d) {
+  p <- pesos_sa(m, d)
+  gs <- sort(unique(p[grupo >= 0L, grupo]))
+  W <- t(sapply(gs, function(g) w_sa(p, p$grupo == g & p$k >= 0L)))
+  if (length(gs) > 1L) W <- rbind(W, t(sapply(gs[-1], function(g) W[match(g, gs), ] - W[1, ])))
+  r <- comb_sa(m, d, W)
+  if (length(gs) == 1L)
+    stopifnot("el ATT no reproduce a fixest" =
+                abs(r$b - fixest::coeftable(summary(m, agg = "ATT"))["ATT", 1]) < 1e-8)
+  data.table(efecto = c(paste0("grupo", gs), if (length(gs) > 1L) paste0("dif", gs[-1])),
+             est = r$b, se = r$se, p = 2 * pt(-abs(r$b / r$se), r$gl))
+}
 # coeficientes `patron`::k de un modelo fixest, con la referencia -1 en cero
 tidy_es <- function(m, patron = "rel") {
   ct <- fixest::coeftable(m)
@@ -265,26 +329,57 @@ n_estaciones <- function(m, d) {
 # comunas (clusters) que usa el modelo
 n_comunas <- function(m, d) uniqueN(d[fixest::obs(m), comuna])
 
-# valor p del test de Wald conjunto de los bins previos a la entrada (-NBIN a -2), con el
-# vcov agrupado del modelo. En Sun y Abraham (`d` = datos de estimación con cohorte y per) el
-# test es sobre los bins agregados: cada bin es el promedio de los coeficientes por cohorte
-# ponderado por las observaciones tratadas de la cohorte en ese bin, los mismos pesos que usa
-# fixest al agregar (se verifica que reproduce sus coeficientes), y su vcov es W V W'.
-p_previos <- function(m, patron = "rel", d = NULL) {
+# valor p del test de Wald conjunto de los bins previos a la entrada (-NBIN a -2), con el vcov
+# agrupado del modelo. En Sun y Abraham (`d` = datos de estimación con cohorte y per) el test es sobre
+# los bins agregados del grupo `grupo`, con vcov W V W' y gl = comunas - 1.
+p_previos <- function(m, patron = "rel", d = NULL, grupo = 0L) {
   if (is.null(d)) {
     previos <- sprintf("^%s::-[2-%d]($|:)", patron, NBIN)
     return(sprintf("%.3f", fixest::wald(m, keep = previos, print = FALSE)$p))
   }
-  b <- m$coefficients
-  k <- as.integer(sub(sprintf("^%s::(-?\\d+):cohort::.*", patron), "\\1", names(b)))
-  coh <- sub(".*:cohort::", "", names(b))
-  u <- d[fixest::obs(m)][treated == 1L, .N, by = .(rel = per - cohorte, cohorte = as.character(cohorte))]
-  n <- u[data.table(rel = k, cohorte = coh), on = .(rel, cohorte), N]
+  p <- pesos_sa(m, d)
   bins <- -NBIN:-2
-  W <- t(sapply(bins, function(r) ifelse(k == r, n, 0) / sum(n[k == r])))
-  bb <- drop(W %*% b)
-  stopifnot("la agregación no reproduce a fixest" =
-              isTRUE(all.equal(bb, unname(coef(m)[sprintf("%s::%d", patron, bins)]), tolerance = 1e-8)))
-  F <- drop(t(bb) %*% solve(W %*% m$cov.scaled %*% t(W)) %*% bb) / length(bins)
-  sprintf("%.3f", pf(F, length(bins), n_comunas(m, d) - 1L, lower.tail = FALSE))
+  r <- comb_sa(m, d, t(sapply(bins, function(kk) w_sa(p, p$grupo == grupo & p$k == kk))))
+  if (uniqueN(p[grupo >= 0L, grupo]) == 1L)
+    stopifnot("la agregación no reproduce a fixest" =
+                isTRUE(all.equal(unname(r$b), unname(coef(m)[sprintf("per::%d", bins)]), tolerance = 1e-8)))
+  F <- drop(t(r$b) %*% solve(r$V) %*% r$b) / length(bins)
+  sprintf("%.3f", pf(F, length(bins), r$gl, lower.tail = FALSE))
+}
+
+# Anillos de distancia con radio exterior R (Gráficos 6 y 10, B.21 y B.22). Para cada incumbente, su
+# primera entrada competidora a <= R km con las reglas de 03_paneles.R (sin la propia marca, solo
+# entradas dentro de su vida en el panel), la más cercana del mes: fecha (mes continuo), segunda entrada
+# a <= R km, distancia, si es independiente (ni Copec, ni Shell/Enex, ni Aramco/Petrobras) y el anillo
+# según `cortes` (0, 1, ...). Controles: incumbentes sin entradas de ninguna marca, ni de la propia, a <= R km.
+# Devuelve la muestra con treated, g_evento, rel, el corte en la segunda entrada, sin cohortes previas a `focal`.
+# `R_ctrl`: radio sin entradas de los controles (por defecto, el exterior); `excluir_misma = FALSE` cuenta también
+# las entradas de la propia marca (columna misma: la entrante es de la marca de la incumbente).
+muestra_anillos <- function(panel, entradas, cortes, focal, R_ctrl = max(cortes), excluir_misma = TRUE) {
+  R <- max(cortes)
+  st <- panel[base == TRUE & !is.na(lat), .(lat = lat[1], lon = lon[1], distribuidor = distribuidor[1],
+                                            ini = min(miym), fin = max(miym)), by = station_key]
+  gm <- mi(entradas$g)
+  D <- dist_km(st$lat, st$lon, entradas$elat, entradas$elon)
+  D[!(outer(st$ini, gm, "<") & outer(st$fin, gm, ">="))] <- Inf
+  controles <- st$station_key[apply(D, 1, min) > R_ctrl]
+  misma <- outer(marca_red(st$distribuidor), marca_red(entradas$edist), "==")
+  if (excluir_misma) D[!is.na(misma) & misma] <- Inf
+  a <- rbindlist(lapply(seq_len(nrow(st)), function(i) {
+    w <- which(D[i, ] <= R)
+    if (!length(w)) return(NULL)
+    meses <- sort(unique(gm[w]))
+    primera <- w[gm[w] == meses[1]]
+    cercana <- primera[which.min(D[i, primera])]
+    data.table(station_key = st$station_key[i], g_r = meses[1], g2_r = if (length(meses) > 1) meses[2] else NA_integer_,
+               km = D[i, cercana], indep = as.integer(!(entradas$edist[cercana] %in% MARCAS_MAYORES)),
+               misma = as.integer(misma[i, cercana] %in% TRUE))
+  }))[g_r %/% 12L >= focal]
+  a[, anillo := pmax(0L, findInterval(km, cortes, left.open = TRUE) - 1L)]
+  d <- panel[base == TRUE & station_key %in% c(controles, a$station_key)]
+  d[a, on = "station_key", `:=`(g_r = i.g_r, g2_r = i.g2_r, km = i.km, indep = i.indep, misma = i.misma, anillo = i.anillo)]
+  d[, treated := as.integer(!is.na(g_r))]
+  d <- d[treated == 0L | is.na(g2_r) | miym < g2_r]
+  d[, g_evento := mi2date(g_r)]
+  d[, rel := fifelse(treated == 1L, pmax(-NBIN, pmin(NBIN, (miym - g_r) %/% BIN_M)), -1L)][]
 }

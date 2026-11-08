@@ -2,7 +2,7 @@
 #
 # Gráfico 8: regresión de distribución (Chernozhukov, Fernández-Val y Melly, 2013) del precio
 # menos su media nacional del mes. Para cada umbral c de una grilla de NC cuantiles,
-# kappa(c) = efecto de la entrada sobre 1[y <= c] con la especificación principal; la
+# kappa(c) = ATT de Sun y Abraham (cohortes anuales) sobre 1[y <= c] con los efectos fijos principales; la
 # distribución sin entrada es la observada de las tratadas después de la entrada menos kappa(c).
 # Los umbrales son cuantiles de la muestra conjunta (tratadas y controles). El log reporta
 # kappa(c) con su error agrupado por comuna (puntual, sin bandas uniformes) en los umbrales
@@ -16,8 +16,12 @@ library(fixest)
 
 NC <- 41L   # umbrales, entre los cuantiles 2 y 98
 
-d <- muestra_estacion(leer_panel("2012_2026"), CTRL_ESTRICTO, VENTANAS[["2012_2026"]]$focal)
+# ---- Muestra ----
+
+d <- cohortes_sunab(muestra_estacion(leer_panel("2012_2026"), CTRL_ESTRICTO, VENTANAS[["2012_2026"]]$focal))
 d[, post := as.integer(treated == 1L & ym >= g_entry)]
+
+# ---- Regresión de distribución por umbral ----
 
 cdf <- rbindlist(lapply(names(PRECIOS), function(fv) {
   y <- paste0(fv, "_dev")
@@ -25,10 +29,10 @@ cdf <- rbindlist(lapply(names(PRECIOS), function(fv) {
   cs <- quantile(z[[y]], seq(0.02, 0.98, length.out = NC), names = FALSE)
   ind <- sprintf("ind%02d", seq_along(cs))
   z[, (ind) := lapply(cs, function(cc) as.numeric(get(y) <= cc))]
-  m <- feols(as.formula(sprintf("c(%s) ~ post | %s", paste(ind, collapse = ", "), FE_PRINCIPAL)),
+  m <- feols(as.formula(sprintf("c(%s) ~ sunab(cohorte, per) | %s", paste(ind, collapse = ", "), FE_PRINCIPAL)),
              data = z, cluster = ~comuna)
-  kappa <- vapply(seq_along(ind), function(j) coef(m[[j]])[["post"]], numeric(1))
-  se <- vapply(seq_along(ind), function(j) se(m[[j]])[["post"]], numeric(1))
+  a <- rbindlist(lapply(seq_along(ind), function(j) att_sa(m[[j]], z)))
+  kappa <- a$est; se <- a$se
   q <- seq(0.02, 0.98, length.out = NC)
   sel <- vapply(c(0.10, 0.25, 0.50, 0.75, 0.90), function(v) which.min(abs(q - v)), integer(1))
   message(PRECIOS[[fv]], ": kappa (pp) en los cuantiles ", paste(sprintf("%.3f", q[sel]), collapse = "/"), " = ",
@@ -41,6 +45,8 @@ cdf <- rbindlist(lapply(names(PRECIOS), function(fv) {
              F = c(observada, observada - kappa))
 }))
 cdf[, combustible := factor(combustible, levels = PRECIOS)]
+
+# ---- Gráfico 8: distribución acumulada observada y contrafactual ----
 
 fig <- ggplot(cdf, aes(c, F, colour = serie, linetype = serie)) +
   geom_line() +

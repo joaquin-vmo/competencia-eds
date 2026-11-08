@@ -42,6 +42,8 @@ REGION <- c(
   # ambos
   "valparaíso" = "valparaiso", "ñuble" = "nuble", "tarapacá" = "tarapaca", "arica y parinacota" = "arica")
 
+# ---- Funciones de lectura y limpieza ----
+
 recodificar <- function(x, dic) {
   i <- match(x, names(dic))
   fifelse(is.na(i), x, dic[i])
@@ -108,6 +110,8 @@ limpiar_precios <- function(d) {
   d[price %between% c(PRECIO_MIN, PRECIO_MAX)]
 }
 
+# ---- Régimen antiguo (2012-2022) ----
+
 message("Régimen antiguo")
 antiguo <- leer_regimen(ANIOS[ANIOS < year(CORTE_REGIMEN)], sep = ";", columnas = c(
   "id", NA, "distributor", NA, NA, "municipality", "region", "price", "date", "fuel", "latitud", "longitud")) |>
@@ -116,6 +120,8 @@ antiguo <- leer_regimen(ANIOS[ANIOS < year(CORTE_REGIMEN)], sep = ";", columnas 
   informar("sin registros de prueba y con coordenadas válidas") |>
   limpiar_precios() |>
   informar("combustibles del análisis con precio válido")
+
+# ---- Régimen actual (2023-2026) ----
 
 message("Régimen actual")
 actual <- leer_regimen(ANIOS[ANIOS >= year(CORTE_REGIMEN)], sep = ",", columnas = c(
@@ -131,6 +137,8 @@ actual[, c("latitud", "longitud") := { i <- which.max(n); .(latitud[i], longitud
 actual[, n := NULL]
 actual <- limpiar_precios(actual) |>
   informar("combustibles asistidos con precio válido")
+
+# ---- Empalme de los dos regímenes ----
 
 # Las coordenadas del régimen actual son más exactas: cada estación toma su ubicación más
 # frecuente del actual y esta reemplaza a la del antiguo

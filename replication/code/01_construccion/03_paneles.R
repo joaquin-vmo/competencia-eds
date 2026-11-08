@@ -8,8 +8,8 @@
 #      - duplicación: un código con letra final (co1234a) cuyo código base existe a
 #        <= RADIO_MISMO_LOCAL_M.
 #   2. Panel semanal: último precio de cada semana (jueves a miércoles). Una semana sin
-#      reporte arrastra el último precio hasta MAX_ARRASTRE_SEM semanas; un vacío mayor saca
-#      a la estación. Margen = precio - costo mayorista con MEPCO.
+#      reporte arrastra el último precio hasta MAX_ARRASTRE_SEM semanas; pasado ese plazo, las semanas
+#      sin reporte quedan fuera hasta que la estación vuelve a reportar. Margen = precio - costo mayorista con MEPCO.
 #   3. Panel mensual: la última semana de cada mes.
 #   4. Por ventana (VENTANAS): incumbentes, entradas y asignación de tratamiento, más las
 #      variables de estación que usan las estimaciones (distancia a autopista, entrante que
@@ -165,6 +165,8 @@ inicio_id <- idinfo[, .(fecha_entrante = min(first_date)), by = station_key]   #
 #     para usar el radio k como definición de tratada.
 #   entrante_*: las entrantes que tratan a la estación (mes g_entry, <= 2 km, otra marca); entrante_marca
 #     es la marca de la más cercana de ellas.
+#   entrante5_marca: marca de la entrante que define g5_entry y ring_entry (la más cercana del primer mes
+#     con una entrada a <= 5 km).
 min_o_na <- function(x) if (all(is.na(x))) NA_integer_ else as.integer(min(x, na.rm = TRUE))
 
 asignar_tratamiento <- function(sloc, entradas) {
@@ -172,7 +174,7 @@ asignar_tratamiento <- function(sloc, entradas) {
   g_ev <- mi(entradas$g)
   D_ev[cbind(match(entradas$station_key, sloc$station_key), seq_len(nrow(entradas)))] <- Inf
   D_ev[!(outer(mi(sloc$entry_ym), g_ev, "<") & outer(mi(sloc$last_ym), g_ev, ">="))] <- Inf
-  misma_marca <- outer(sloc$distribuidor, entradas$edist, "==")
+  misma_marca <- outer(marca_red(sloc$distribuidor), marca_red(entradas$edist), "==")
   misma_marca <- !is.na(misma_marca) & misma_marca
   D_mm <- D_ev
   D_mm[!misma_marca] <- Inf   # solo entradas de la propia marca
@@ -211,7 +213,8 @@ asignar_tratamiento <- function(sloc, entradas) {
       entrante_key        = if (length(trata)) entradas$station_key[cercana] else NA_character_,
       entrante_marca      = if (length(trata)) entradas$edist[cercana] else NA_character_,
       entrante_autopista  = if (length(trata)) any(entradas$d_autopista[trata] <= AUTOPISTA_M) else NA,
-      entrante_semana     = min_o_na(entradas$semana_1[trata])
+      entrante_semana     = min_o_na(entradas$semana_1[trata]),
+      entrante5_marca     = if (length(w5)) entradas$edist[w5[1]] else NA_character_
     )[, c(paste0(rep(c("g_entry_r", "g2_entry_r"), length(RADIOS_EXTRA)), rep(RADIOS_EXTRA, each = 2))) := as.list(do.call(c, extra))][]
   }))
 }

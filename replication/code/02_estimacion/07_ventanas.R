@@ -1,18 +1,21 @@
 # 07_ventanas.R
 #
 # Estudio de eventos principal en las ventanas antes (2014_2019) y después (2021_2026) de la
-# pandemia, TWFE y Sun y Abraham (2021) con la misma muestra, efectos fijos y bins.
+# pandemia, TWFE y Sun y Abraham (2021) con la misma muestra, efectos fijos y bins. Los Gráficos 11 y 12
+# muestran Sun y Abraham; las Tablas C.9 y C.10, en el anexo, ambos estimadores.
 #
 # Entrada: data/processed/panel_<ventana>/panel_mensual.csv
-# Salida:  outputs/grafico_10_ventana_2014_2019.pdf, outputs/grafico_11_ventana_2021_2026.pdf,
+# Salida:  outputs/grafico_11_ventana_2014_2019.pdf, outputs/grafico_12_ventana_2021_2026.pdf,
 #          outputs/tabla_C09_ventana_2014_2019.tex, outputs/tabla_C10_ventana_2021_2026.tex
 
 source(here::here("code", "00_configuracion.R"))
 library(fixest)
 
-SALIDAS <- list("2014_2019" = c(grafico = "grafico_10_ventana_2014_2019.pdf", tabla = "tabla_C09_ventana_2014_2019.tex"),
-                "2021_2026" = c(grafico = "grafico_11_ventana_2021_2026.pdf", tabla = "tabla_C10_ventana_2021_2026.tex"))
+SALIDAS <- list("2014_2019" = c(grafico = "grafico_11_ventana_2014_2019.pdf", tabla = "tabla_C09_ventana_2014_2019.tex"),
+                "2021_2026" = c(grafico = "grafico_12_ventana_2021_2026.pdf", tabla = "tabla_C10_ventana_2021_2026.tex"))
 ESTIMADORES <- c("TWFE", "Sun y Abraham")
+
+# ---- Tablas C.9 y C.10, Gráficos 11 y 12: TWFE y Sun y Abraham por ventana ----
 
 for (ventana in names(SALIDAS)) {
   d <- cohortes_sunab(muestra_estacion(leer_panel(ventana), CTRL_ESTRICTO, VENTANAS[[ventana]]$focal))
@@ -48,6 +51,6 @@ for (ventana in names(SALIDAS)) {
                  SALIDAS[[ventana]][["tabla"]])
 
   es[, `:=`(combustible = factor(combustible, levels = PRECIOS), estimador = factor(estimador, levels = ESTIMADORES))]
-  guardar(grafico_es(es, "estimador"), SALIDAS[[ventana]][["grafico"]], alto = 3.2)
+  guardar(grafico_es(es[estimador == ESTIMADORES[2]]), SALIDAS[[ventana]][["grafico"]], alto = 3.2)   # el cuerpo: Sun y Abraham
   message(sprintf("Ventana %s: tratadas %s, controles %s", ventana, paste(n[1, ], collapse = "/"), paste(n[2, ], collapse = "/")))
 }

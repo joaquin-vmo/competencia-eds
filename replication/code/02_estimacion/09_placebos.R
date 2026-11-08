@@ -1,16 +1,19 @@
 # 09_placebos.R
 #
 # Placebos y fechado de la entrada, ventana 2012_2026, especificación principal.
-#   Gráfico 13: entrada fechada un período (seis meses) antes de la registrada, en meses,
-#     con referencia en el mes previo a la entrada adelantada.
-#   Gráfico B.5: estudio de eventos con la entrada registrada y fechada dos meses antes.
+#   Gráfico 14: entrada fechada un período (seis meses) antes de la registrada, en meses,
+#     con referencia en el mes previo a la entrada adelantada. TWFE: con bins mensuales Sun y
+#     Abraham tendría unos 640 coeficientes por cohorte y mes, y el error agrupado por comuna se
+#     subestima como con cohortes mensuales (ver cohortes_sunab()).
+#   Gráfico B.5: Sun y Abraham con la entrada registrada y fechada dos meses antes.
 #   Tabla C.8: fechas de entrada falsas en el grupo de control. Cada réplica sortea la
 #     proporción real de tratadas dentro del grupo, les asigna cohortes y desfases a la segunda
 #     entrada de sus distribuciones reales, corta en la segunda entrada falsa y estima el ATT
-#     estático. Sobre todo el grupo y sobre su mitad más densa (vecinas a <= 2 km).
+#     estático (TWFE: 4.000 regresiones; bajo la nula ambos estimadores coinciden). Sobre todo el
+#     grupo y sobre su mitad más densa (vecinas a <= 2 km).
 #
 # Entrada: data/processed/panel_2012_2026/panel_mensual.csv
-# Salida:  outputs/grafico_13_placebo_adelanto.pdf, outputs/grafico_B05_es_adelanto_2meses.pdf,
+# Salida:  outputs/grafico_14_placebo_adelanto.pdf, outputs/grafico_B05_es_adelanto_2meses.pdf,
 #          outputs/tabla_C08_placebo_controles.tex
 
 source(here::here("code", "00_configuracion.R"))
@@ -20,7 +23,7 @@ panel <- leer_panel("2012_2026")
 d <- muestra_estacion(panel, CTRL_ESTRICTO, VENTANAS[["2012_2026"]]$focal)
 
 # ==============================================================================
-# Gráfico 13: entrada adelantada seis meses, resolución mensual
+# Gráfico 14: entrada adelantada seis meses, resolución mensual
 # ==============================================================================
 
 DELTA <- BIN_M          # meses que se adelanta la entrada: un período
@@ -42,7 +45,7 @@ fig <- ggplot(res, aes(mes, estimate)) +
   scale_linetype_manual(values = c("dotted", "dashed")) +
   labs(x = "Meses desde la entrada registrada", y = "Efecto sobre el precio (%)", linetype = NULL)
 print(res[, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)], nrows = Inf)   # cifras que cita el texto
-guardar(fig, "grafico_13_placebo_adelanto.pdf", alto = 3.4)
+guardar(fig, "grafico_14_placebo_adelanto.pdf", alto = 3.4)
 
 # ==============================================================================
 # Gráfico B.5: entrada registrada y adelantada dos meses
@@ -50,11 +53,12 @@ guardar(fig, "grafico_13_placebo_adelanto.pdf", alto = 3.4)
 
 ADELANTO <- 2L   # meses
 FECHAS <- c("Entrada registrada", "Entrada adelantada 2 meses")
-d[, rel_adel := fifelse(treated == 1L, pmax(-NBIN, pmin(NBIN, (miym - (mi(g_entry) - ADELANTO)) %/% BIN_M)), -1L)]
+adelantada <- cohortes_sunab(copy(d)[, `:=`(g_evento = mi2date(mi(g_entry) - ADELANTO),
+                                            rel = fifelse(treated == 1L, pmax(-NBIN, pmin(NBIN, (miym - (mi(g_entry) - ADELANTO)) %/% BIN_M)), -1L))])
+registrada <- cohortes_sunab(copy(d))
 res <- rbindlist(lapply(names(PRECIOS), function(fv) {
-  x <- d[!is.na(get(fv))]
-  rbind(tidy_es(estimar_es(x, fv))[, fecha := FECHAS[1]],
-        tidy_es(estimar_es(x, fv, "i(rel_adel, treated, ref = -1)"), "rel_adel")[, fecha := FECHAS[2]])[
+  rbind(tidy_es(estimar_sa(registrada[!is.na(get(fv))], fv), "per")[, fecha := FECHAS[1]],
+        tidy_es(estimar_sa(adelantada[!is.na(get(fv))], fv), "per")[, fecha := FECHAS[2]])[
     , combustible := PRECIOS[[fv]]]
 }))
 res[, `:=`(combustible = factor(combustible, levels = PRECIOS), fecha = factor(fecha, levels = FECHAS))]
@@ -75,7 +79,7 @@ d[, post := as.integer(treated == 1L & ym >= g_entry)]
 st <- unique(d[, .(station_key, treated, g_entry, g2_entry)])
 prop_trat <- mean(st$treated)
 coh_real <- mi(st[treated == 1L, g_entry])
-d2_real  <- st[treated == 1L & !is.na(g2_entry), mi(g2_entry) - mi(g_entry)]
+d2_real  <- st[treated == 1L, mi(g2_entry) - mi(g_entry)]   # NA: sin segunda entrada, la falsa tratada no se corta
 
 dens <- d[treated == 0L, .(n = mean(n_vecinas)), keyby = station_key]
 pools <- list(completo = dens$station_key, denso = dens[n >= median(n), station_key])

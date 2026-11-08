@@ -23,12 +23,16 @@ DIA_CORTE     <- 1L    # el día de actualización o el siguiente (Tabla 1)
 MIN_CTRL_REG  <- 5L    # controles mínimos de la región en cada actualización
 VIGENCIA      <- 91L   # días máximos desde el último reporte (13 semanas, como el panel)
 
+# ---- Tratadas y controles estrictos ----
+
 est <- unique(fread(file.path(dir_ventana("2012_2026"), "panel_mensual.csv"),
                     select = c("station_key", "region", "role_entry", "entrante_key", "fecha_entrante")),
               by = "station_key")
 trat <- est[role_entry == "treated" & fecha_entrante >= DESDE_ENTRADA & fecha_entrante <= HASTA_ENTRADA,
             .(station_key, region, fecha_e = as.IDate(fecha_entrante))]
 ctrl <- est[role_entry == "ctrl_b", .(station_key, region)]
+
+# ---- Actualizaciones del costo y precio diario ----
 
 # actualizaciones del costo de la 93
 costo <- fread(ruta_proc("costo_mepco.csv"))[, .(u = as.IDate(date), c = `93_w/`)]
@@ -54,6 +58,8 @@ cambio_log <- function(x) {   # x: station_key, u
     .(station_key, u, antes, dlp = 100 * (log(despues) - log(antes)),
       dlp_01 = 100 * (log(corte) - log(antes)), dlp_26 = 100 * (log(despues) - log(corte)))]
 }
+
+# ---- Cambio de las tratadas frente a los controles de su región ----
 
 # tratadas: actualizaciones a +-K_SEMANAS de la entrada; k = semanas desde la entrada
 tu <- trat[, .(u = upd$u), by = .(station_key, fecha_e, region)]

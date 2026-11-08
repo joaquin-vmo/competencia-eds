@@ -25,15 +25,21 @@ FNE <- list(Copec     = c("5--10\\% (40--50)", "5--10\\% (50--60)", "5--10\\% (4
             Petrobras = c("--", "--", "0--5\\% (20--30)", "0--5\\% (20--30)", "5--10\\% (30--40)"),
             Shell     = rep("0--5\\% (20--30)", 5))
 
+# ---- Estaciones a menos de 5 km de la ex Sesa ----
+
 d <- leer_panel("2012_2026")[ym >= DESDE & ym <= HASTA & distribuidor %in% names(MARCAS)]
 d[, km := as.vector(dist_km(REF_LAT, REF_LON, lat, lon))]
 d <- d[km > 0.01 & km < 5]   # la estación no es rival de sí misma
 d[, `:=`(anillo = floor(km), marca = factor(MARCAS[distribuidor], levels = MARCAS))]
 
+# ---- Margen ponderado por volumen ----
+
 num <- Reduce(`+`, lapply(names(W), function(f) W[[f]] * fcoalesce(d[[MARGEN[[f]]]], 0)))
 den <- Reduce(`+`, lapply(names(W), function(f) W[[f]] * fifelse(is.na(d[[MARGEN[[f]]]]), 0, d[[f]])))
 wd  <- Reduce(`+`, lapply(names(W), function(f) W[[f]] * !is.na(d[[MARGEN[[f]]]])))
 d[, `:=`(pct = 100 * num / den, pesos = num / wd)]
+
+# ---- Tabla C.2: margen por anillo frente al informe de la FNE ----
 
 agr <- d[is.finite(pct), .(pct = mean(pct), pesos = mean(pesos)), keyby = .(anillo, marca)]
 celda <- function(m, a) {

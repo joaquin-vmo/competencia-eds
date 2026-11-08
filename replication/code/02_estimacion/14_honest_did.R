@@ -1,7 +1,8 @@
 # 14_honest_did.R
 #
 # Tabla C.7: sensibilidad a tendencias paralelas (Rambachan y Roth, 2023, magnitudes relativas)
-# del estudio de eventos principal. Para el bin de impacto (meses 0 a 5) y el de meses 6 a 11:
+# del estudio de eventos principal de Sun y Abraham (bins agregados, vcov W V W'). Para el bin de impacto
+# (meses 0 a 5) y el de meses 6 a 11:
 # estimador, IC al 95 % y el Mbar de quiebre, el mayor Mbar de la grilla con el que el
 # intervalo robusto aún excluye el cero.
 #
@@ -18,14 +19,22 @@ GRID_SE <- 60   # semiancho de la búsqueda del intervalo, en errores estándar
 HORIZONTES <- c(impacto = 1L, meses_6_11 = 2L)   # posición del bin entre los posteriores
 ETIQUETA   <- c(impacto = "Impacto (meses 0 a 5)", meses_6_11 = "Meses 6 a 11")
 
-d <- muestra_estacion(leer_panel("2012_2026"), CTRL_ESTRICTO, VENTANAS[["2012_2026"]]$focal)
+# ---- Muestra ----
+
+d <- cohortes_sunab(muestra_estacion(leer_panel("2012_2026"), CTRL_ESTRICTO, VENTANAS[["2012_2026"]]$focal))
+
+# ---- Sensibilidad por combustible y bin ----
 
 sensibilidad <- function(z, y) {
-  m <- estimar_es(z, y)
-  nm <- grep("^rel::", names(coef(m)), value = TRUE)     # -4..-2 y 0..4, ya ordenados
-  b <- unname(coef(m)[nm])
-  V <- matrix(as.numeric(vcov(m)[nm, nm]), length(nm))   # HonestDiD no lee fixest_vcov
-  n_pre <- sum(as.integer(sub("^rel::(-?\\d+).*", "\\1", nm)) < 0)
+  m <- estimar_sa(z, y)
+  p <- pesos_sa(m, z)
+  bins <- setdiff(-NBIN:NBIN, -1L)                         # -4..-2 y 0..4
+  r <- comb_sa(m, z, t(sapply(bins, function(k) w_sa(p, p$k == k))))
+  stopifnot("la agregación no reproduce a fixest" = isTRUE(all.equal(unname(r$b), unname(coef(m)[sprintf("per::%d", bins)]), tolerance = 1e-8)))
+  b <- unname(r$b)
+  V <- unname(r$V)
+  nm <- bins
+  n_pre <- sum(bins < 0)
   n_post <- length(nm) - n_pre
   n <- n_estaciones(m, z)
 
@@ -50,6 +59,8 @@ sensibilidad <- function(z, y) {
 }
 
 res <- rbindlist(lapply(names(PRECIOS), function(fv) sensibilidad(d[!is.na(get(fv))], fv)))
+
+# ---- Tabla C.7 ----
 
 fmt_quiebre <- function(q) fifelse(q == 0, sprintf("$<$%.2f", MBAR[1]),
                                    fifelse(is.infinite(q), sprintf("$>$%.0f", max(MBAR)), sprintf("%.2f", q)))

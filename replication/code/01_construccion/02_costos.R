@@ -4,7 +4,7 @@
 #   1. Costo mayorista semanal con y sin MEPCO (Ministerio de Hacienda) para 93, 97 y diésel.
 #      La 95 no tiene referencia, por eso no tiene margen. La serie es de jueves
 #      consecutivos y cae sobre la grilla semanal del panel (SEMANA_0).
-#   2. Estructura del precio a público de la 93 y el diésel (CNE), en $/L por componente.
+#   2. Estructura del precio a público de la 93 y el diésel (CNE), como fracción del precio por componente.
 #
 # Entrada: data/raw/mepco.xlsx, data/raw/estructura_precios_combustibles.xlsx
 # Salida:  data/processed/costo_mepco.csv, data/processed/estructura_precios.csv

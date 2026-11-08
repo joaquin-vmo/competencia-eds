@@ -1,7 +1,7 @@
 # 13_panel_semanal.R
 #
-# Gráfico B.8: estudio de eventos en panel mensual (especificación principal) y semanal, con el
-# diseño de Fischer et al. (2025): semana de la entrada (primera semana con precio de la
+# Gráfico B.8: estudio de eventos en panel mensual (especificación principal) y semanal, con una
+# resolución más cercana a la de Fischer et al. (2025), que usan precios diarios: semana de la entrada (primera semana con precio de la
 # entrante), bins de 26 semanas, efecto fijo de semana y cohortes trimestrales en Sun y Abraham.
 #
 # Entrada: data/processed/panel_2012_2026/{panel_mensual.csv,panel_semanal.csv.gz}
@@ -15,6 +15,8 @@ FUEL    <- c(p93 = "93", p95 = "95", p97 = "97", pdi = "di")  # códigos del pan
 FE_SEM  <- "station_key + wi + region^year + distribuidor^year"
 SERIES  <- c("Mensual, TWFE", "Semanal, TWFE", "Semanal, Sun y Abraham")
 focal   <- VENTANAS[["2012_2026"]]$focal
+
+# ---- Muestras mensual y semanal ----
 
 mensual <- muestra_estacion(leer_panel("2012_2026"), CTRL_ESTRICTO, focal)
 
@@ -30,8 +32,10 @@ d[, semana_e := SEMANA_0 + entrante_semana * 7L]
 d[, cohorte := fifelse(treated == 1L, year(semana_e) * 4L + (month(semana_e) - 1L) %/% 3L, 1000L)]   # trimestre
 d[, rel_sa := fifelse(treated == 1L, rel, -1000L)]
 
+# ---- Estimación: mensual TWFE, semanal TWFE y semanal Sun y Abraham ----
+
 # shortcut: saca de Sun y Abraham las cohortes con algún coeficiente de error estándar > 100
-# veces la mediana (no identificadas por los efectos fijos); en la 95 es una cohorte de dos estaciones
+# veces la mediana (no identificadas por los efectos fijos); en la 95 y el diésel, la cohorte 8097 (segundo trimestre de 2024)
 sunab_identificado <- function(x, fml) {
   m <- feols(fml("sunab(cohorte, rel_sa, no_agg = TRUE)"), data = x, cluster = ~comuna)
   se <- coeftable(m)[, 2]
@@ -50,4 +54,6 @@ res <- rbindlist(lapply(names(FUEL), function(fv) {
 }))
 res[, `:=`(combustible = factor(combustible, levels = PRECIOS), serie = factor(serie, levels = SERIES))]
 print(res[, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)], nrows = Inf)   # cifras que cita el texto
+# ---- Gráfico B.8 ----
+
 guardar(grafico_es(res, "serie", dodge = 0.6), "grafico_B08_panel_semanal.pdf", alto = 3.2)
