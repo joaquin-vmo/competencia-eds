@@ -5,11 +5,16 @@
 # la especificación está aquí; ningún script lo redefine.
 
 suppressPackageStartupMessages({
-  library(data.table)
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(stringr)
+  library(purrr)
+  library(tibble)
+  library(lubridate)
   library(ggplot2)
   library(here)
 })
-stopifnot("falta R.utils: fread() lo usa para leer los .csv.gz" = requireNamespace("R.utils", quietly = TRUE))
 
 # ==============================================================================
 # Rutas
@@ -28,7 +33,7 @@ ruta_out  <- function(archivo) file.path(DIR_OUT, archivo)
 # ==============================================================================
 
 R_TIERRA <- 6371                     # km
-SEMANA_0 <- as.IDate("2012-01-05")   # jueves ancla de la grilla semanal (calendario MEPCO)
+SEMANA_0 <- as.Date("2012-01-05")   # jueves ancla de la grilla semanal (calendario MEPCO)
 MAX_ARRASTRE_SEM <- 13L              # semanas máximas que se arrastra un precio sin reporte
 RADIO_MISMO_LOCAL_M <- 50            # un código nuevo a menos de 50 m de uno apagado es el mismo local
 
@@ -37,16 +42,16 @@ R_CTRL_AMP <- 3   # km: control amplio, nunca una entrada a <= 3 km
 R_CTRL_EST <- 5   # km: control estricto, nunca una entrada a <= 5 km
 RADIOS_EXTRA <- c(1, 3)   # km: radios adicionales de tratamiento (el de 2 y el de 5 ya existen)
 MARCAS_MAYORES <- c("copec", "shell", "enex", "aramco_petrobras")   # entrante independiente: ninguna de estas
-marca_red <- function(x) fifelse(x %in% "enex", "shell", x)   # Enex opera la red Shell: para "misma marca" son una
+marca_red <- function(x) if_else(x %in% "enex", "shell", x)   # Enex opera la red Shell: para "misma marca" son una
 AUTOPISTA_M <- 100   # m: estación de autopista si está a <= 100 m de la red vial clase 1
 
-REFORMA_MEPCO <- as.IDate("2023-01-26")   # primera actualización trisemanal del costo (ley 21.537)
+REFORMA_MEPCO <- as.Date("2023-01-26")   # primera actualización trisemanal del costo (ley 21.537)
 
 # Ventanas: incumbentes = estaciones presentes en `desde`; cohortes focales desde `focal`
 VENTANAS <- list(
-  "2012_2026" = list(desde = 2012L, hasta = as.IDate("2026-12-31"), focal = 2014L),
-  "2014_2019" = list(desde = 2014L, hasta = as.IDate("2019-12-31"), focal = 2015L),
-  "2021_2026" = list(desde = 2021L, hasta = as.IDate("2026-02-28"), focal = 2022L)
+  "2012_2026" = list(desde = 2012L, hasta = as.Date("2026-12-31"), focal = 2014L),
+  "2014_2019" = list(desde = 2014L, hasta = as.Date("2019-12-31"), focal = 2015L),
+  "2021_2026" = list(desde = 2021L, hasta = as.Date("2026-02-28"), focal = 2022L)
 )
 dir_ventana <- function(v) ruta_proc(paste0("panel_", v))
 
@@ -96,7 +101,7 @@ stopifnot(a_coma("-0.296$^{***}$ & 124,434 & [-0.2; 1.5] & 2021") == "-0{,}296$^
 # etable de fixest a un .tex, con los números en formato español
 # (do.call: etable evalúa sus argumentos en su propio marco y no acepta que lleguen por `...`)
 etable_tex <- function(..., archivo) writeLines(a_coma(do.call(fixest::etable, c(list(...), tex = TRUE))), ruta_out(archivo))
-estrellas <- function(p) fifelse(p < 0.01, "$^{***}$", fifelse(p < 0.05, "$^{**}$", fifelse(p < 0.10, "$^{*}$", "")))
+estrellas <- function(p) if_else(p < 0.01, "$^{***}$", if_else(p < 0.05, "$^{**}$", if_else(p < 0.10, "$^{*}$", "")))
 
 # coeficiente con estrellas y, en la fila siguiente, su error estándar entre paréntesis
 filas_coef <- function(nombre, est, se, p, dig = 3) {
@@ -165,18 +170,13 @@ grafico_es <- function(res, serie = NULL, dodge = 0.4, y = "Efecto sobre el prec
 # ==============================================================================
 
 mi <- function(d) {   # mes continuo
-  d <- as.IDate(d)
+  d <- as.Date(d)
   year(d) * 12L + (month(d) - 1L)
 }
 
-mi2date <- function(m) {
-  out <- rep(NA_integer_, length(m))
-  ok <- !is.na(m)
-  out[ok] <- as.integer(as.IDate(sprintf("%d-%02d-01", m[ok] %/% 12L, m[ok] %% 12L + 1L)))
-  as.IDate(out)
-}
+mi2date <- function(m) make_date(m %/% 12L, m %% 12L + 1L, 1L)
 
-semana <- function(d) as.integer(as.IDate(d) - SEMANA_0) %/% 7L   # índice de la grilla semanal
+semana <- function(d) as.integer(as.Date(d) - SEMANA_0) %/% 7L   # índice de la grilla semanal
 
 # ==============================================================================
 # Distancias
@@ -211,12 +211,24 @@ CRS_M <- 32719   # WGS84 / UTM 19S, la del shapefile de red vial
 # Lectura de los paneles y muestra de estimación
 # ==============================================================================
 
+# Lee un .csv como lo hacía fread(): enteros si todos los valores lo son y texto vacío = "" (no NA)
+leer_csv <- function(archivo, ...) {
+  read_csv(archivo, guess_max = Inf, show_col_types = FALSE, progress = FALSE, ...) |>
+    mutate(across(where(is.character), \(x) replace_na(x, ""))) |>
+    mutate(across(where(\(x) is.double(x) && !inherits(x, c("Date", "difftime"))),
+                  \(x) if (all(x == round(x) & abs(x) < .Machine$integer.max, na.rm = TRUE)) as.integer(x) else x))
+}
+# 15 cifras significativas, como fwrite(); write_csv() escribe 17
+escribir_csv <- function(d, archivo) {
+  d |> mutate(across(where(\(x) is.double(x) && !inherits(x, c("Date", "difftime"))), \(x) signif(x, 15))) |>
+    write_csv(archivo, na = "")
+}
+
 leer_panel <- function(ventana, archivo = "panel_mensual.csv", select = NULL) {
-  panel <- fread(file.path(dir_ventana(ventana), archivo), select = select)
+  panel <- leer_csv(file.path(dir_ventana(ventana), archivo), col_select = if (is.null(select)) everything() else all_of(select))
   fechas <- intersect(c("ym", "wk", "g_entry", "g2_entry", "g5_entry", "g2_5_entry", "fecha_entrante",
                         paste0(c("g_entry_r", "g2_entry_r"), rep(RADIOS_EXTRA, each = 2))), names(panel))
-  panel[, (fechas) := lapply(.SD, as.IDate), .SDcols = fechas]
-  panel[, year := year(ym)][]
+  panel |> mutate(across(all_of(fechas), as.Date), year = year(ym))
 }
 
 # Tratadas + controles `roles`, cortada en la segunda entrada, sin cohortes previas a
@@ -232,13 +244,13 @@ muestra_estacion <- function(panel, roles, focal, radio = R_TRATADA) {
   } else {
     stopifnot(radio %in% RADIOS_EXTRA)
     g <- paste0("g_entry_r", radio); g2 <- paste0("g2_entry_r", radio); rol <- "rol_radio"
-    panel <- copy(panel)[, rol_radio := fifelse(!is.na(get(g)), "treated", role_entry)]
+    panel <- mutate(panel, rol_radio = if_else(!is.na(.data[[g]]), "treated", role_entry))
   }
-  d <- panel[get(rol) %in% c("treated", roles) & (is.na(get(g2)) | ym < get(g2)) & base == TRUE]
-  d <- d[!(get(rol) == "treated" & year(get(g)) < focal)]
-  d[, `:=`(treated = as.integer(get(rol) == "treated"), g_evento = get(g))]
-  d[, rel := fifelse(treated == 1L, pmax(-NBIN, pmin(NBIN, (miym - mi(g_evento)) %/% BIN_M)), -1L)]
-  d[]
+  panel |>
+    filter(.data[[rol]] %in% c("treated", roles), is.na(.data[[g2]]) | ym < .data[[g2]], base == TRUE) |>
+    filter(!(.data[[rol]] == "treated" & year(.data[[g]]) < focal)) |>
+    mutate(treated = as.integer(.data[[rol]] == "treated"), g_evento = .data[[g]],
+           rel = if_else(treated == 1L, pmax(-NBIN, pmin(NBIN, (miym - mi(g_evento)) %/% BIN_M)), -1L))
 }
 
 # Especificación principal: log(precio) x 100, FE_PRINCIPAL, errores agrupados por comuna
@@ -259,9 +271,10 @@ COHORTE_NUNCA <- 99999L
 GRUPO_SA <- 10000L
 cohortes_sunab <- function(d, grupo = NULL) {
   g <- if (is.null(grupo)) 0L else d[[grupo]]
-  stopifnot("grupo fuera de rango" = is.null(grupo) || all(d[treated == 1L][[grupo]] %in% 0:9))
-  d[, cohorte := fifelse(treated == 1L, year(g_evento) + GRUPO_SA * g, COHORTE_NUNCA)]
-  d[, per := fifelse(treated == 1L, cohorte + rel, miym)][]
+  stopifnot("grupo fuera de rango" = is.null(grupo) || all(d[[grupo]][d$treated == 1L] %in% 0:9))
+  d |>
+    mutate(cohorte = if_else(treated == 1L, year(g_evento) + GRUPO_SA * g, COHORTE_NUNCA)) |>
+    mutate(per = if_else(treated == 1L, cohorte + rel, miym))
 }
 estimar_sa <- function(data, y, ...) estimar_es(data, y, "sunab(cohorte, per)", ...)
 
@@ -273,10 +286,11 @@ pesos_sa <- function(m, d) {
   nm <- names(m$coefficients)
   k <- suppressWarnings(as.integer(sub("^per::(-?\\d+):cohort::.*", "\\1", nm)))   # NA: otros regresores
   coh <- as.integer(sub(".*:cohort::", "", nm))
-  u <- d[fixest::obs(m)][treated == 1L, .N, by = .(k = per - cohorte, coh = cohorte)]
-  celdas <- data.table(k = k, coh = coh)   # fuera de u[...]: dentro, k y coh serían columnas de u
-  p <- data.table(k = k, grupo = coh %/% GRUPO_SA, n = u[celdas, on = .(k, coh), N])
-  p[is.na(k), `:=`(k = NA_integer_, grupo = -1L, n = 0L)][]   # otros regresores (p. ej. treated): peso 0
+  u <- d |> slice(fixest::obs(m)) |> filter(treated == 1L) |> count(k = per - cohorte, coh = cohorte)
+  tibble(k = k, coh = coh) |>
+    left_join(u, by = c("k", "coh")) |>
+    transmute(k, grupo = coh %/% GRUPO_SA, n) |>
+    mutate(grupo = if_else(is.na(k), -1L, grupo), n = if_else(is.na(k), 0L, n), k = if_else(is.na(k), NA_integer_, k))   # otros regresores (p. ej. treated): peso 0
 }
 # filas de W: combinaciones de los coeficientes por cohorte; `sel` elige los de cada fila
 w_sa <- function(p, sel) { w <- ifelse(sel %in% TRUE, p$n, 0); w / sum(w) }
@@ -289,45 +303,47 @@ comb_sa <- function(m, d, W) {
 # bins (-NBIN a NBIN, sin -1) por grupo, con la referencia en cero
 agregar_sa <- function(m, d) {
   p <- pesos_sa(m, d)
-  cel <- unique(p[grupo >= 0L, .(grupo, k)])[k != -1L][order(grupo, k)]
+  cel <- p |> filter(grupo >= 0L) |> distinct(grupo, k) |> filter(k != -1L) |> arrange(grupo, k)
   r <- comb_sa(m, d, t(mapply(function(g, kk) w_sa(p, p$grupo == g & p$k == kk), cel$grupo, cel$k)))
-  if (uniqueN(cel$grupo) == 1L)
+  if (n_distinct(cel$grupo) == 1L)
     stopifnot("la agregación no reproduce a fixest" =
                 isTRUE(all.equal(unname(r$b), unname(coef(m)[sprintf("per::%d", cel$k)]), tolerance = 1e-8)))
-  out <- cel[, .(grupo, event_time = k, estimate = r$b, se = r$se, p = 2 * pt(-abs(r$b / r$se), r$gl))]
-  setorder(rbind(out, data.table(grupo = unique(cel$grupo), event_time = -1L, estimate = 0, se = 0, p = NA_real_)),
-           grupo, event_time)[]
+  cel |>
+    transmute(grupo, event_time = k, estimate = r$b, se = r$se, p = 2 * pt(-abs(r$b / r$se), r$gl)) |>
+    bind_rows(tibble(grupo = unique(cel$grupo), event_time = -1L, estimate = 0, se = 0, p = NA_real_)) |>
+    arrange(grupo, event_time)
 }
 # ATT (bins >= 0) de cada grupo y, si hay dos o más, la diferencia de cada uno con el grupo 0
 att_sa <- function(m, d) {
   p <- pesos_sa(m, d)
-  gs <- sort(unique(p[grupo >= 0L, grupo]))
+  gs <- sort(unique(p$grupo[p$grupo >= 0L]))
   W <- t(sapply(gs, function(g) w_sa(p, p$grupo == g & p$k >= 0L)))
   if (length(gs) > 1L) W <- rbind(W, t(sapply(gs[-1], function(g) W[match(g, gs), ] - W[1, ])))
   r <- comb_sa(m, d, W)
   if (length(gs) == 1L)
     stopifnot("el ATT no reproduce a fixest" =
                 abs(r$b - fixest::coeftable(summary(m, agg = "ATT"))["ATT", 1]) < 1e-8)
-  data.table(efecto = c(paste0("grupo", gs), if (length(gs) > 1L) paste0("dif", gs[-1])),
-             est = r$b, se = r$se, p = 2 * pt(-abs(r$b / r$se), r$gl))
+  tibble(efecto = c(paste0("grupo", gs), if (length(gs) > 1L) paste0("dif", gs[-1])),
+         est = r$b, se = r$se, p = 2 * pt(-abs(r$b / r$se), r$gl))
 }
 # coeficientes `patron`::k de un modelo fixest, con la referencia -1 en cero
 tidy_es <- function(m, patron = "rel") {
   ct <- fixest::coeftable(m)
   ct <- ct[grepl(sprintf("^%s::", patron), rownames(ct)), , drop = FALSE]
-  d <- data.table(event_time = as.integer(sub(sprintf("^%s::(-?\\d+).*", patron), "\\1", rownames(ct))),
-                  estimate = ct[, 1], se = ct[, 2], p = ct[, 4])
-  setorder(rbind(d, data.table(event_time = -1L, estimate = 0, se = 0, p = NA_real_)), event_time)[]
+  tibble(event_time = as.integer(sub(sprintf("^%s::(-?\\d+).*", patron), "\\1", rownames(ct))),
+         estimate = ct[, 1], se = ct[, 2], p = ct[, 4]) |>
+    bind_rows(tibble(event_time = -1L, estimate = 0, se = 0, p = NA_real_)) |>
+    arrange(event_time)
 }
 
 # tratadas y controles que usa el modelo (sin singletons descartados)
 n_estaciones <- function(m, d) {
-  u <- d[fixest::obs(m)]
-  c(uniqueN(u[treated == 1L, station_key]), uniqueN(u[treated == 0L, station_key]))
+  u <- slice(d, fixest::obs(m))
+  c(n_distinct(u$station_key[u$treated == 1L]), n_distinct(u$station_key[u$treated == 0L]))
 }
 
 # comunas (clusters) que usa el modelo
-n_comunas <- function(m, d) uniqueN(d[fixest::obs(m), comuna])
+n_comunas <- function(m, d) n_distinct(d$comuna[fixest::obs(m)])
 
 # valor p del test de Wald conjunto de los bins previos a la entrada (-NBIN a -2), con el vcov
 # agrupado del modelo. En Sun y Abraham (`d` = datos de estimación con cohorte y per) el test es sobre
@@ -340,7 +356,7 @@ p_previos <- function(m, patron = "rel", d = NULL, grupo = 0L) {
   p <- pesos_sa(m, d)
   bins <- -NBIN:-2
   r <- comb_sa(m, d, t(sapply(bins, function(kk) w_sa(p, p$grupo == grupo & p$k == kk))))
-  if (uniqueN(p[grupo >= 0L, grupo]) == 1L)
+  if (n_distinct(p$grupo[p$grupo >= 0L]) == 1L)
     stopifnot("la agregación no reproduce a fixest" =
                 isTRUE(all.equal(unname(r$b), unname(coef(m)[sprintf("per::%d", bins)]), tolerance = 1e-8)))
   F <- drop(t(r$b) %*% solve(r$V) %*% r$b) / length(bins)
@@ -357,29 +373,34 @@ p_previos <- function(m, patron = "rel", d = NULL, grupo = 0L) {
 # las entradas de la propia marca (columna misma: la entrante es de la marca de la incumbente).
 muestra_anillos <- function(panel, entradas, cortes, focal, R_ctrl = max(cortes), excluir_misma = TRUE) {
   R <- max(cortes)
-  st <- panel[base == TRUE & !is.na(lat), .(lat = lat[1], lon = lon[1], distribuidor = distribuidor[1],
-                                            ini = min(miym), fin = max(miym)), by = station_key]
+  st <- panel |>
+    filter(base == TRUE, !is.na(lat)) |>
+    summarise(lat = lat[1], lon = lon[1], distribuidor = distribuidor[1], ini = min(miym), fin = max(miym),
+              .by = station_key)
   gm <- mi(entradas$g)
   D <- dist_km(st$lat, st$lon, entradas$elat, entradas$elon)
   D[!(outer(st$ini, gm, "<") & outer(st$fin, gm, ">="))] <- Inf
   controles <- st$station_key[apply(D, 1, min) > R_ctrl]
   misma <- outer(marca_red(st$distribuidor), marca_red(entradas$edist), "==")
   if (excluir_misma) D[!is.na(misma) & misma] <- Inf
-  a <- rbindlist(lapply(seq_len(nrow(st)), function(i) {
+  a <- map(seq_len(nrow(st)), function(i) {
     w <- which(D[i, ] <= R)
     if (!length(w)) return(NULL)
     meses <- sort(unique(gm[w]))
     primera <- w[gm[w] == meses[1]]
     cercana <- primera[which.min(D[i, primera])]
-    data.table(station_key = st$station_key[i], g_r = meses[1], g2_r = if (length(meses) > 1) meses[2] else NA_integer_,
-               km = D[i, cercana], indep = as.integer(!(entradas$edist[cercana] %in% MARCAS_MAYORES)),
-               misma = as.integer(misma[i, cercana] %in% TRUE))
-  }))[g_r %/% 12L >= focal]
-  a[, anillo := pmax(0L, findInterval(km, cortes, left.open = TRUE) - 1L)]
-  d <- panel[base == TRUE & station_key %in% c(controles, a$station_key)]
-  d[a, on = "station_key", `:=`(g_r = i.g_r, g2_r = i.g2_r, km = i.km, indep = i.indep, misma = i.misma, anillo = i.anillo)]
-  d[, treated := as.integer(!is.na(g_r))]
-  d <- d[treated == 0L | is.na(g2_r) | miym < g2_r]
-  d[, g_evento := mi2date(g_r)]
-  d[, rel := fifelse(treated == 1L, pmax(-NBIN, pmin(NBIN, (miym - g_r) %/% BIN_M)), -1L)][]
+    tibble(station_key = st$station_key[i], g_r = meses[1], g2_r = if (length(meses) > 1) meses[2] else NA_integer_,
+           km = D[i, cercana], indep = as.integer(!(entradas$edist[cercana] %in% MARCAS_MAYORES)),
+           misma = as.integer(misma[i, cercana] %in% TRUE))
+  }) |>
+    list_rbind() |>
+    filter(g_r %/% 12L >= focal) |>
+    mutate(anillo = pmax(0L, findInterval(km, cortes, left.open = TRUE) - 1L))
+  panel |>
+    filter(base == TRUE, station_key %in% c(controles, a$station_key)) |>
+    left_join(select(a, station_key, g_r, g2_r, km, indep, misma, anillo), by = "station_key") |>
+    mutate(treated = as.integer(!is.na(g_r))) |>
+    filter(treated == 0L | is.na(g2_r) | miym < g2_r) |>
+    mutate(g_evento = mi2date(g_r),
+           rel = if_else(treated == 1L, pmax(-NBIN, pmin(NBIN, (miym - g_r) %/% BIN_M)), -1L))
 }

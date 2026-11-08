@@ -20,23 +20,23 @@ ESTIMADORES <- c("TWFE", "Sun y Abraham")
 for (ventana in names(SALIDAS)) {
   d <- cohortes_sunab(muestra_estacion(leer_panel(ventana), CTRL_ESTRICTO, VENTANAS[[ventana]]$focal))
 
-  res <- lapply(names(PRECIOS), function(fv) {
-    x <- d[!is.na(get(fv))]
+  res <- map(names(PRECIOS), function(fv) {
+    x <- filter(d, !is.na(.data[[fv]]))
     tw <- estimar_es(x, fv)
     sa <- estimar_es(x, fv, "sunab(cohorte, per)")
-    list(es = rbind(tidy_es(tw)[, estimador := ESTIMADORES[1]],
-                    tidy_es(sa, "per")[, estimador := ESTIMADORES[2]])[
-                      , combustible := PRECIOS[[fv]]],
+    list(es = bind_rows(tidy_es(tw) |> mutate(estimador = ESTIMADORES[1]),
+                        tidy_es(sa, "per") |> mutate(estimador = ESTIMADORES[2])) |>
+           mutate(combustible = PRECIOS[[fv]]),
          n = c(n_estaciones(tw, x), nobs(tw), n_comunas(tw, x)),
          p = c(p_previos(tw), p_previos(sa, "per", x)))
   })
-  es <- rbindlist(lapply(res, `[[`, "es"))
+  es <- list_rbind(map(res, "es"))
   n <- sapply(res, `[[`, "n")
-  p_pre <- unlist(lapply(res, `[[`, "p"))
+  p_pre <- list_c(map(res, "p"))
 
   # tabla: filas = bin, columnas = combustible x estimador
   cuerpo <- unlist(lapply(setdiff(-NBIN:NBIN, -1L), function(k) {
-    r <- es[event_time == k][order(match(combustible, PRECIOS), match(estimador, ESTIMADORES))]
+    r <- es |> filter(event_time == k) |> arrange(match(combustible, PRECIOS), match(estimador, ESTIMADORES))
     filas_coef(DICT[[sprintf("rel::%d:treated", k)]], r$estimate, r$se, r$p)
   }))
   dup <- function(v) rep(v, each = 2)
@@ -50,7 +50,7 @@ for (ventana in names(SALIDAS)) {
                    fila("Comunas", dup(n[4, ])), fila("Valor $p$ bins previos", p_pre)),
                  SALIDAS[[ventana]][["tabla"]])
 
-  es[, `:=`(combustible = factor(combustible, levels = PRECIOS), estimador = factor(estimador, levels = ESTIMADORES))]
-  guardar(grafico_es(es[estimador == ESTIMADORES[2]]), SALIDAS[[ventana]][["grafico"]], alto = 3.2)   # el cuerpo: Sun y Abraham
+  es <- mutate(es, combustible = factor(combustible, levels = PRECIOS), estimador = factor(estimador, levels = ESTIMADORES))
+  guardar(grafico_es(filter(es, estimador == ESTIMADORES[2])), SALIDAS[[ventana]][["grafico"]], alto = 3.2)   # el cuerpo: Sun y Abraham
   message(sprintf("Ventana %s: tratadas %s, controles %s", ventana, paste(n[1, ], collapse = "/"), paste(n[2, ], collapse = "/")))
 }

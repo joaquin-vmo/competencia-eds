@@ -21,24 +21,26 @@ COMB <- c(`93` = "Gasolina 93", `95` = "Gasolina 95", `97` = "Gasolina 97", DI =
 Y <- c(sigue_24 = "Cambia en la misma dirección en 24 h", iguala = "Iguala el precio en 24 h")
 ANILLOS <- c("0-1", "1-2", "2-3", "3-5")
 
-todos <- fread(ruta_proc("comovimiento_pares.csv.gz"), colClasses = list(character = "fuel"))
+todos <- leer_csv(ruta_proc("comovimiento_pares.csv.gz"), col_types = cols(fuel = "c"))
 MUESTRAS <- c("Semanal (2022)", "Trisemanal, semanas 2 y 3 (2023)")   # las de los gráficos
-pares <- todos[muestra %in% MUESTRAS]
+pares <- filter(todos, muestra %in% MUESTRAS)
 
-res <- rbindlist(lapply(names(Y), function(y) {
-  rbindlist(lapply(split(pares, by = c("fuel", "muestra")), function(z) {
-    m <- feols(as.formula(sprintf("%s ~ i(dist, ref = '5-10') | ev", y)), z, cluster = ~i + j)
+res <- map(names(Y), function(y) {
+  pares |> nest(.by = c(fuel, muestra)) |> pmap(function(fuel, muestra, data) {
+    m <- feols(as.formula(sprintf("%s ~ i(dist, ref = '5-10') | ev", y)), data, cluster = ~i + j)
     ct <- coeftable(m)
-    data.table(fuel = z$fuel[1], muestra = z$muestra[1], y = y, dist = sub("dist::", "", rownames(ct)),
-               est = ct[, 1], se = ct[, 2], cambios = uniqueN(z$ev))
-  }))
-}))
-res[, `:=`(dist = factor(dist, levels = ANILLOS), combustible = factor(COMB[fuel], levels = COMB),
-           y = factor(Y[y], levels = Y))]
+    tibble(fuel = fuel, muestra = muestra, y = y, dist = sub("dist::", "", rownames(ct)),
+           est = ct[, 1], se = ct[, 2], cambios = n_distinct(data$ev))
+  }) |> list_rbind()
+}) |>
+  list_rbind() |>
+  mutate(dist = factor(dist, levels = ANILLOS), combustible = factor(COMB[fuel], levels = COMB),
+         y = factor(Y[y], levels = Y))
 
 message("Cambios líderes por combustible y muestra (notas de los Gráficos 7 y B.9):")
-print(dcast(unique(res[, .(combustible, muestra, cambios)]), combustible ~ muestra, value.var = "cambios"))
-print(res[, .(y, muestra, combustible, dist, est = round(est, 2), se = round(se, 2))])
+res |> distinct(combustible, muestra, cambios) |> pivot_wider(names_from = muestra, values_from = cambios) |>
+  arrange(combustible) |> print()
+res |> transmute(y, muestra, combustible, dist, est = round(est, 2), se = round(se, 2)) |> print(n = Inf)
 
 grafico <- function(d, serie = NULL) {
   fig <- ggplot(d, aes(dist, est)) +
@@ -51,25 +53,28 @@ grafico <- function(d, serie = NULL) {
                         position = position_dodge(width = 0.45), size = 0.2)
 }
 
-guardar(grafico(res[muestra == "Semanal (2022)"]), "grafico_07_comovimiento_semanal.pdf", alto = 4)
+guardar(grafico(filter(res, muestra == "Semanal (2022)")), "grafico_07_comovimiento_semanal.pdf", alto = 4)
 guardar(grafico(res, "muestra"), "grafico_B09_comovimiento_regimenes.pdf", alto = 4)
 
 # ---- Gráfico B.11: alzas y bajas ----
 
 DIRECCION <- c(`1` = "Alzas", `-1` = "Bajas")
-dir <- rbindlist(lapply(split(pares, by = c("fuel", "muestra", "sgn")), function(z) {
-  m <- feols(sigue_24 ~ i(dist, ref = '5-10') | ev, z, cluster = ~i + j)
+dir <- pares |> nest(.by = c(fuel, muestra, sgn)) |> pmap(function(fuel, muestra, sgn, data) {
+  m <- feols(sigue_24 ~ i(dist, ref = '5-10') | ev, data, cluster = ~i + j)
   ct <- coeftable(m)
-  data.table(fuel = z$fuel[1], muestra = z$muestra[1], direccion = DIRECCION[[as.character(z$sgn[1])]],
-             dist = sub("dist::", "", rownames(ct)), est = ct[, 1], se = ct[, 2], cambios = uniqueN(z$ev),
-             base = z[dist == "5-10", mean(sigue_24)])
-}))
-dir[, `:=`(dist = factor(dist, levels = ANILLOS), combustible = factor(COMB[fuel], levels = COMB),
-           direccion = factor(direccion, levels = DIRECCION))]
+  tibble(fuel = fuel, muestra = muestra, direccion = DIRECCION[[as.character(sgn)]],
+         dist = sub("dist::", "", rownames(ct)), est = ct[, 1], se = ct[, 2], cambios = n_distinct(data$ev),
+         base = mean(data$sigue_24[data$dist == "5-10"]))
+}) |>
+  list_rbind() |>
+  mutate(dist = factor(dist, levels = ANILLOS), combustible = factor(COMB[fuel], levels = COMB),
+         direccion = factor(direccion, levels = DIRECCION))
 message("Alzas y bajas: cambios líderes y probabilidad base a 5-10 km (Gráfico B.11):")
-print(dcast(unique(dir[, .(combustible, muestra, direccion, cambios, base = round(base, 2))]),
-            combustible ~ muestra + direccion, value.var = c("cambios", "base")))
-print(dir[dist %in% c("0-1", "1-2", "2-3"), .(combustible, muestra, direccion, dist, est = round(est, 2), se = round(se, 2))])
+dir |> distinct(combustible, muestra, direccion, cambios, base = round(base, 2)) |>
+  pivot_wider(id_cols = combustible, names_from = c(muestra, direccion), values_from = c(cambios, base)) |>
+  arrange(combustible) |> print()
+dir |> filter(dist %in% c("0-1", "1-2", "2-3")) |>
+  transmute(combustible, muestra, direccion, dist, est = round(est, 2), se = round(se, 2)) |> print(n = Inf)
 fig <- ggplot(dir, aes(dist, est, colour = direccion, shape = direccion)) +
   geom_hline(yintercept = 0, colour = COLOR_REF) +
   geom_pointrange(aes(ymin = est - 1.96 * se, ymax = est + 1.96 * se), position = position_dodge(width = 0.45), size = 0.2) +
@@ -79,12 +84,13 @@ guardar(fig, "grafico_B11_comovimiento_direccion.pdf", alto = 4)
 
 # ---- Cifras agregadas (robustez) ----
 
-todos[, d2 := fifelse(dist %in% c("0-1", "1-2"), "0-2", as.character(dist))]
+todos <- mutate(todos, d2 = if_else(dist %in% c("0-1", "1-2"), "0-2", as.character(dist)))
 agregada <- function(z) {
   ct <- coeftable(feols(sigue_24 ~ i(d2, ref = '5-10') | ev, z, cluster = ~i + j))["d2::0-2", ]
-  data.table(dif = ct[[1]], se = ct[[2]], p = ct[[4]], base = z[dist == "5-10", mean(sigue_24)], cambios = uniqueN(z$ev))
+  tibble(dif = ct[[1]], se = ct[[2]], p = ct[[4]], base = mean(z$sigue_24[z$dist == "5-10"]), cambios = n_distinct(z$ev))
 }
+redondear <- function(d) mutate(d, across(where(is.numeric), \(v) round(v, 3)))
 message("Diferencia a <= 2 km frente a 5-10 km, cuatro combustibles juntos, por muestra:")
-print(todos[, agregada(.SD), by = muestra][, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)])
+todos |> group_by(muestra) |> group_modify(\(z, k) agregada(z)) |> ungroup() |> redondear() |> print()
 message("Por marca de la líder, todos los días de domingo a martes de cada régimen:")
-print(todos[, agregada(.SD), by = .(reg, marca_i)][order(reg, marca_i)][, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)])
+todos |> group_by(reg, marca_i) |> group_modify(\(z, k) agregada(z)) |> ungroup() |> arrange(reg, marca_i) |> redondear() |> print()

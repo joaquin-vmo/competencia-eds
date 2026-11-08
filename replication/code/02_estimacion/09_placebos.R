@@ -30,12 +30,14 @@ DELTA <- BIN_M          # meses que se adelanta la entrada: un período
 NB_M  <- NBIN * BIN_M   # meses a cada lado de la entrada registrada; los extremos se agrupan
 
 # tiempo desde la entrada adelantada, para que la referencia -1 sea el mes previo a ella
-d[, relp := fifelse(treated == 1L, pmax(-NB_M, pmin(NB_M, miym - mi(g_entry))) + DELTA, -1L)]
-res <- rbindlist(lapply(names(PRECIOS), function(fv)
-  tidy_es(estimar_es(d[!is.na(get(fv))], fv, "i(relp, treated, ref = -1)"), "relp")[, combustible := PRECIOS[[fv]]]))
-res[, `:=`(mes = event_time - DELTA, combustible = factor(combustible, levels = PRECIOS))]
+d <- d |> mutate(relp = if_else(treated == 1L, pmax(-NB_M, pmin(NB_M, miym - mi(g_entry))) + DELTA, -1L))
+res <- map(names(PRECIOS), function(fv)
+  tidy_es(estimar_es(filter(d, !is.na(.data[[fv]])), fv, "i(relp, treated, ref = -1)"), "relp") |>
+    mutate(combustible = PRECIOS[[fv]])) |>
+  list_rbind() |>
+  mutate(mes = event_time - DELTA, combustible = factor(combustible, levels = PRECIOS))
 
-ENTRADAS <- data.table(x = c(-DELTA, 0), tipo = c("Entrada adelantada (placebo)", "Entrada registrada"))
+ENTRADAS <- tibble(x = c(-DELTA, 0), tipo = c("Entrada adelantada (placebo)", "Entrada registrada"))
 fig <- ggplot(res, aes(mes, estimate)) +
   geom_hline(yintercept = 0, colour = COLOR_REF) +
   geom_vline(data = ENTRADAS, aes(xintercept = x, linetype = tipo), colour = COLOR_REF) +
@@ -44,7 +46,7 @@ fig <- ggplot(res, aes(mes, estimate)) +
   scale_x_continuous(breaks = seq(-NB_M, NB_M, BIN_M)) +
   scale_linetype_manual(values = c("dotted", "dashed")) +
   labs(x = "Meses desde la entrada registrada", y = "Efecto sobre el precio (%)", linetype = NULL)
-print(res[, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)], nrows = Inf)   # cifras que cita el texto
+res |> mutate(across(where(is.numeric), \(v) round(v, 3))) |> print(n = Inf)   # cifras que cita el texto
 guardar(fig, "grafico_14_placebo_adelanto.pdf", alto = 3.4)
 
 # ==============================================================================
@@ -53,16 +55,19 @@ guardar(fig, "grafico_14_placebo_adelanto.pdf", alto = 3.4)
 
 ADELANTO <- 2L   # meses
 FECHAS <- c("Entrada registrada", "Entrada adelantada 2 meses")
-adelantada <- cohortes_sunab(copy(d)[, `:=`(g_evento = mi2date(mi(g_entry) - ADELANTO),
-                                            rel = fifelse(treated == 1L, pmax(-NBIN, pmin(NBIN, (miym - (mi(g_entry) - ADELANTO)) %/% BIN_M)), -1L))])
-registrada <- cohortes_sunab(copy(d))
-res <- rbindlist(lapply(names(PRECIOS), function(fv) {
-  rbind(tidy_es(estimar_sa(registrada[!is.na(get(fv))], fv), "per")[, fecha := FECHAS[1]],
-        tidy_es(estimar_sa(adelantada[!is.na(get(fv))], fv), "per")[, fecha := FECHAS[2]])[
-    , combustible := PRECIOS[[fv]]]
-}))
-res[, `:=`(combustible = factor(combustible, levels = PRECIOS), fecha = factor(fecha, levels = FECHAS))]
-print(res[, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)], nrows = Inf)   # cifras que cita el texto
+adelantada <- d |>
+  mutate(g_evento = mi2date(mi(g_entry) - ADELANTO),
+         rel = if_else(treated == 1L, pmax(-NBIN, pmin(NBIN, (miym - (mi(g_entry) - ADELANTO)) %/% BIN_M)), -1L)) |>
+  cohortes_sunab()
+registrada <- cohortes_sunab(d)
+res <- map(names(PRECIOS), function(fv) {
+  bind_rows(tidy_es(estimar_sa(filter(registrada, !is.na(.data[[fv]])), fv), "per") |> mutate(fecha = FECHAS[1]),
+            tidy_es(estimar_sa(filter(adelantada, !is.na(.data[[fv]])), fv), "per") |> mutate(fecha = FECHAS[2])) |>
+    mutate(combustible = PRECIOS[[fv]])
+}) |>
+  list_rbind() |>
+  mutate(combustible = factor(combustible, levels = PRECIOS), fecha = factor(fecha, levels = FECHAS))
+res |> mutate(across(where(is.numeric), \(v) round(v, 3))) |> print(n = Inf)   # cifras que cita el texto
 guardar(grafico_es(res, "fecha"), "grafico_B05_es_adelanto_2meses.pdf", alto = 3.6)
 
 # ==============================================================================
@@ -74,48 +79,51 @@ SEMILLA <- 20260902L
 POOLS   <- c(completo = "Todo el grupo de control", denso = "Mitad más densa del grupo de control")
 
 set.seed(SEMILLA)
-d[, post := as.integer(treated == 1L & ym >= g_entry)]
+d <- mutate(d, post = as.integer(treated == 1L & ym >= g_entry))
 
-st <- unique(d[, .(station_key, treated, g_entry, g2_entry)])
+st <- distinct(d, station_key, treated, g_entry, g2_entry)
 prop_trat <- mean(st$treated)
-coh_real <- mi(st[treated == 1L, g_entry])
-d2_real  <- st[treated == 1L, mi(g2_entry) - mi(g_entry)]   # NA: sin segunda entrada, la falsa tratada no se corta
+coh_real <- mi(st$g_entry[st$treated == 1L])
+d2_real  <- mi(st$g2_entry[st$treated == 1L]) - mi(st$g_entry[st$treated == 1L])   # NA: sin segunda entrada, la falsa tratada no se corta
 
-dens <- d[treated == 0L, .(n = mean(n_vecinas)), keyby = station_key]
-pools <- list(completo = dens$station_key, denso = dens[n >= median(n), station_key])
+dens <- d |> filter(treated == 0L) |> summarise(n = mean(n_vecinas), .by = station_key) |> arrange(station_key)
+pools <- list(completo = dens$station_key, denso = dens$station_key[dens$n >= median(dens$n)])
 
 FML <- as.formula(sprintf("c(%s) ~ post | %s", paste(sprintf("log(%s) * 100", names(PRECIOS)), collapse = ", "), FE_PRINCIPAL))
 att <- function(datos) {
   m <- feols(FML, data = datos, cluster = ~comuna)
-  rbindlist(lapply(seq_along(PRECIOS), function(j) {
+  map(seq_along(PRECIOS), function(j) {
     ct <- coeftable(m[[j]])["post", ]
-    data.table(outcome = names(PRECIOS)[j], att = ct[[1]], se = ct[[2]], p = ct[[4]])
-  }))
+    tibble(outcome = names(PRECIOS)[j], att = ct[[1]], se = ct[[2]], p = ct[[4]])
+  }) |> list_rbind()
 }
 
 reales <- att(d)
-reps <- rbindlist(lapply(names(POOLS), function(pool) {
+reps <- map(names(POOLS), function(pool) {
   sk <- pools[[pool]]
-  base <- d[station_key %in% sk, !c("g_entry", "g2_entry", "post")]
+  base <- d |> filter(station_key %in% sk) |> select(-g_entry, -g2_entry, -post)
   k <- round(prop_trat * length(sk))
-  rbindlist(lapply(seq_len(B), function(b) {
+  map(seq_len(B), function(b) {
     g <- sample(coh_real, k, replace = TRUE)
-    falsa <- data.table(station_key = sample(sk, k), g = g, g2 = g + sample(d2_real, k, replace = TRUE))
-    x <- falsa[base, on = "station_key"][is.na(g2) | miym < g2]
-    x[, post := as.integer(!is.na(g) & miym >= g)]
-    att(x)[, `:=`(pool = pool, rep = b)]
-  }))
-}))
+    falsa <- tibble(station_key = sample(sk, k), g = g, g2 = g + sample(d2_real, k, replace = TRUE))
+    x <- base |>
+      left_join(falsa, by = "station_key") |>
+      filter(is.na(g2) | miym < g2) |>
+      mutate(post = as.integer(!is.na(g) & miym >= g))
+    att(x) |> mutate(pool = pool, rep = b)
+  }) |> list_rbind()
+}) |> list_rbind()
 
-res <- reps[, .(media = mean(att), de = sd(att), se_medio = mean(se),
-                q025 = quantile(att, 0.025), q975 = quantile(att, 0.975), rechazo = mean(p < 0.05),
-                p_ri = mean(abs(att) >= abs(reales[outcome == .BY$outcome, att]))),
-            by = .(pool, outcome)]
+res <- reps |>
+  summarise(media = mean(att), de = sd(att), se_medio = mean(se),
+            q025 = quantile(att, 0.025, names = FALSE), q975 = quantile(att, 0.975, names = FALSE), rechazo = mean(p < 0.05),
+            p_ri = mean(abs(att) >= abs(reales$att[reales$outcome == outcome[1]])),
+            .by = c(pool, outcome))
 
-ordenar <- function(r) r[match(names(PRECIOS), outcome)]
+ordenar <- function(r) slice(r, match(names(PRECIOS), outcome))
 num <- function(x, k = 3) sprintf("%.*f", k, x)
 cuerpo <- unlist(lapply(names(POOLS), function(pl) {
-  r <- ordenar(res[pool == pl])
+  r <- ordenar(filter(res, pool == pl))
   c(sprintf("\\multicolumn{5}{l}{\\emph{%s (%d estaciones)}} \\\\", POOLS[[pl]], length(pools[[pl]])),
     fila("\\quad ATT placebo medio", num(r$media)),
     fila("\\quad Desviación estándar de la distribución", num(r$de)),

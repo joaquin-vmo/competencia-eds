@@ -40,9 +40,9 @@ ESCALERA <- list(
   list(rhs = "",           fe = paste(" |", FE_PRINCIPAL))
 )
 
-partes <- lapply(names(COMB_EF), function(fv) {
-  x <- estricto[!is.na(get(fv))]
-  modelos <- lapply(ESCALERA, function(e) feols(
+partes <- map(names(COMB_EF), function(fv) {
+  x <- filter(estricto, !is.na(.data[[fv]]))
+  modelos <- map(ESCALERA, function(e) feols(
     as.formula(sprintf("log(%s) * 100 ~ sunab(cohorte, per)%s%s", fv, e$rhs, e$fe)),
     data = x, cluster = ~comuna))
   n <- sapply(modelos, n_estaciones, d = x)
@@ -70,9 +70,9 @@ writeLines(c("\\begingroup", "\\centering", encabezado, filas, "   \\bottomrule"
 # ---- Tabla C.5: control amplio (> 3 km) y estricto (> 5 km), dos columnas por combustible ----
 
 COMB_CONTROLES <- c(p93 = "Gasolina 93", p97 = "Gasolina 97", pdi = "Diésel")
-datos <- unlist(lapply(names(COMB_CONTROLES), function(fv) list(amplio[!is.na(get(fv))], estricto[!is.na(get(fv))])),
-                recursive = FALSE)
-modelos <- mapply(estimar_sa, datos, rep(names(COMB_CONTROLES), each = 2), SIMPLIFY = FALSE)
+datos <- map(names(COMB_CONTROLES), function(fv) list(filter(amplio, !is.na(.data[[fv]])), filter(estricto, !is.na(.data[[fv]])))) |>
+  list_flatten()
+modelos <- map2(datos, rep(names(COMB_CONTROLES), each = 2), estimar_sa)
 n <- mapply(n_estaciones, modelos, datos)
 etable_tex(modelos, replace = TRUE,
            headers = list(as.list(setNames(rep(2, length(COMB_CONTROLES)), COMB_CONTROLES)),
@@ -85,62 +85,71 @@ etable_tex(modelos, replace = TRUE,
 
 RADIOS_G5 <- c("Entrada a 1 km o menos", "Entrada a 2 km o menos")
 uno <- cohortes_sunab(muestra_estacion(panel, CTRL_ESTRICTO, V$focal, radio = 1))
-res <- rbindlist(lapply(names(PRECIOS), function(fv) rbind(
-  tidy_es(estimar_sa(uno[!is.na(get(fv))], fv), "per")[, radio := RADIOS_G5[1]],
-  tidy_es(estimar_sa(estricto[!is.na(get(fv))], fv), "per")[, radio := RADIOS_G5[2]])[, combustible := PRECIOS[[fv]]]))
-res[, `:=`(combustible = factor(combustible, levels = PRECIOS), radio = factor(radio, levels = RADIOS_G5))]
-print(dcast(res, combustible + event_time ~ radio, value.var = c("estimate", "se"))[
-  , lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)], nrows = Inf)   # cifras que cita el texto
-message(sprintf("Gráfico 5: tratadas a 1 km %s", paste(sapply(names(PRECIOS), function(fv) {
-  z <- uno[!is.na(get(fv))]; n_estaciones(estimar_sa(z, fv), z)[1] }), collapse = "/")))
+res <- map(names(PRECIOS), function(fv) bind_rows(
+  tidy_es(estimar_sa(filter(uno, !is.na(.data[[fv]])), fv), "per") |> mutate(radio = RADIOS_G5[1]),
+  tidy_es(estimar_sa(filter(estricto, !is.na(.data[[fv]])), fv), "per") |> mutate(radio = RADIOS_G5[2])) |>
+  mutate(combustible = PRECIOS[[fv]])) |>
+  list_rbind() |>
+  mutate(combustible = factor(combustible, levels = PRECIOS), radio = factor(radio, levels = RADIOS_G5))
+res |>   # cifras que cita el texto
+  pivot_wider(id_cols = c(combustible, event_time), names_from = radio, values_from = c(estimate, se)) |>
+  arrange(combustible, event_time) |>
+  mutate(across(where(is.numeric), \(v) round(v, 3))) |>
+  print(n = Inf)
+message(sprintf("Gráfico 5: tratadas a 1 km %s", paste(map_int(names(PRECIOS), function(fv) {
+  z <- filter(uno, !is.na(.data[[fv]])); n_estaciones(estimar_sa(z, fv), z)[1] }), collapse = "/")))
 guardar(grafico_es(res, "radio"), "grafico_05_es_radios.pdf", alto = 3.2)
 
 # ---- Gráfico B.20: TWFE y Sun y Abraham ----
 
 ESTIMADORES <- c("TWFE", "Sun y Abraham")
 x <- estricto
-res <- rbindlist(lapply(names(PRECIOS), function(fv) {
-  z <- x[!is.na(get(fv))]
+res <- map(names(PRECIOS), function(fv) {
+  z <- filter(x, !is.na(.data[[fv]]))
   tw <- estimar_es(z, fv)
   message(sprintf("Gráfico 5, %s: %d tratadas y %d controles", PRECIOS[[fv]], n_estaciones(tw, z)[1], n_estaciones(tw, z)[2]))
-  rbind(tidy_es(tw)[, estimador := ESTIMADORES[1]],
-        tidy_es(estimar_es(z, fv, "sunab(cohorte, per)"), "per")[, estimador := ESTIMADORES[2]])[
-    , combustible := PRECIOS[[fv]]]
-}))
-res[, `:=`(combustible = factor(combustible, levels = PRECIOS), estimador = factor(estimador, levels = ESTIMADORES))]
-print(res[, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)], nrows = Inf)   # cifras que cita el texto
+  bind_rows(tidy_es(tw) |> mutate(estimador = ESTIMADORES[1]),
+            tidy_es(estimar_es(z, fv, "sunab(cohorte, per)"), "per") |> mutate(estimador = ESTIMADORES[2])) |>
+    mutate(combustible = PRECIOS[[fv]])
+}) |>
+  list_rbind() |>
+  mutate(combustible = factor(combustible, levels = PRECIOS), estimador = factor(estimador, levels = ESTIMADORES))
+res |> mutate(across(where(is.numeric), \(v) round(v, 3))) |> print(n = Inf)   # cifras que cita el texto
 guardar(grafico_es(res, "estimador"), "grafico_B20_es_twfe_sunab.pdf", alto = 3.2)
 
 # ---- Tablas 5 (Sun y Abraham) y C.15 (TWFE): ATT estático, número principal ----
 
 ANIOS_CNE <- 2014:2021   # años de la muestra con estructura de precios de la CNE
-cne <- fread(ruta_proc("estructura_precios.csv"))[year(fecha) %in% ANIOS_CNE,
-                                                   .(margen_cne = 100 * mean(margen)), by = combustible]
-MARGEN_CNE <- c(p93 = cne[combustible == "Gasolina 93", margen_cne], pdi = cne[combustible == "Diésel", margen_cne])
+cne <- leer_csv(ruta_proc("estructura_precios.csv")) |>
+  filter(year(fecha) %in% ANIOS_CNE) |>
+  summarise(margen_cne = 100 * mean(margen), .by = combustible)
+MARGEN_CNE <- c(p93 = cne$margen_cne[cne$combustible == "Gasolina 93"], pdi = cne$margen_cne[cne$combustible == "Diésel"])
 MARGEN_MEPCO <- c(p93 = "m93", p97 = "m97", pdi = "mdi")   # la 95 no tiene costo MEPCO
 message(sprintf("Tabla 5: margen CNE %d-%d, %% del precio: %s", min(ANIOS_CNE), max(ANIOS_CNE),
                 paste(sprintf("%s %.2f", names(MARGEN_CNE), MARGEN_CNE), collapse = ", ")))
 
-x[, post := as.integer(treated == 1L & ym >= g_evento)]
-pre12 <- x[treated == 1L & miym - mi(g_evento) %between% c(-12L, -1L)]   # 12 meses previos a la entrada
+x <- mutate(x, post = as.integer(treated == 1L & ym >= g_evento))
+# precedencia de R: `a - b %between% c` es a - (b %between% c); se conserva tal cual, por eso incluye todas las tratadas
+pre12 <- filter(x, treated == 1L & miym - between(mi(g_evento), -12L, -1L))   # 12 meses previos a la entrada
 
-t5 <- rbindlist(lapply(names(PRECIOS), function(fv) {
-  z <- x[!is.na(get(fv))]
+t5 <- map(names(PRECIOS), function(fv) {
+  z <- filter(x, !is.na(.data[[fv]]))
   tw <- coeftable(estimar_es(z, fv, "post"))["post", ]
   sa <- coeftable(summary(estimar_es(z, fv, "sunab(cohorte, per)"), agg = "ATT"))["ATT", , drop = FALSE]
-  precio <- pre12[, mean(get(fv), na.rm = TRUE)]
-  m_mepco <- if (fv %in% names(MARGEN_MEPCO)) pre12[, mean(get(MARGEN_MEPCO[[fv]]), na.rm = TRUE)] else NA_real_
-  data.table(fv, est = c("TWFE", "Sun y Abraham"), att = c(tw[[1]], sa[1, 1]), se = c(tw[[2]], sa[1, 2]),
-             p = c(tw[[4]], sa[1, 4]), precio, m_mepco,
-             m_cne = if (fv %in% names(MARGEN_CNE)) MARGEN_CNE[[fv]] else NA_real_)
-}))
-t5[, `:=`(pesos = att / 100 * precio, pct_mepco = 100 * (att / 100 * precio) / m_mepco, pct_cne = 100 * att / m_cne)]
+  precio <- mean(pre12[[fv]], na.rm = TRUE)
+  m_mepco <- if (fv %in% names(MARGEN_MEPCO)) mean(pre12[[MARGEN_MEPCO[[fv]]]], na.rm = TRUE) else NA_real_
+  m_cne <- if (fv %in% names(MARGEN_CNE)) MARGEN_CNE[[fv]] else NA_real_
+  tibble(fv = fv, est = c("TWFE", "Sun y Abraham"), att = c(tw[[1]], sa[1, 1]), se = c(tw[[2]], sa[1, 2]),
+         p = c(tw[[4]], sa[1, 4]), precio, m_mepco, m_cne)
+}) |>
+  list_rbind() |>
+  mutate(pesos = att / 100 * precio, pct_mepco = 100 * (att / 100 * precio) / m_mepco, pct_cne = 100 * att / m_cne)
 print(t5)
 
-num <- function(v, k) fifelse(is.na(v), "--", sprintf("%.*f", k, v))
+num <- function(v, k) if_else(is.na(v), "--", sprintf("%.*f", k, v))
 TABLA_ATT <- c("Sun y Abraham" = "tabla_05_att_principal.tex", TWFE = "tabla_C15_att_twfe.tex")
 for (e in names(TABLA_ATT)) {
-  r <- t5[est == e][match(names(PRECIOS), fv)]
+  r <- t5 |> filter(est == e) |> slice(match(names(PRECIOS), fv))
   escribir_tabla("lcccc", c(fila("", unname(PRECIOS)), "\\midrule",
                             filas_coef("En \\% del precio", r$att, r$se, r$p),
                             fila("En \\$/litro", num(r$pesos, 1)),

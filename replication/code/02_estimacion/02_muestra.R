@@ -19,7 +19,7 @@ library(sf)
 
 V <- VENTANAS[["2012_2026"]]
 panel <- leer_panel("2012_2026")
-entradas <- fread(file.path(dir_ventana("2012_2026"), "entradas.csv"))[, g := as.IDate(g)]
+entradas <- leer_csv(file.path(dir_ventana("2012_2026"), "entradas.csv")) |> mutate(g = as.Date(g))
 
 # ==============================================================================
 # Gráfico 4: caso de entrada
@@ -39,21 +39,23 @@ gs <- st_make_valid(comunas[comunas$codregion == 13 &
                               (comunas$Provincia == "Santiago" | comunas$Comuna %in% c("Puente Alto", "San Bernardo")), ])
 stopifnot(nrow(gs) == 34)
 
-e <- entradas[eregion == "metropolitana" & year(g) >= V$focal]
+e <- filter(entradas, eregion == "metropolitana", year(g) >= V$focal)
 e <- e[as.vector(st_within(st_transform(st_as_sf(e, coords = c("elon", "elat"), crs = 4326), CRS_M),
-                           st_union(gs), sparse = FALSE))]
+                           st_union(gs), sparse = FALSE)), ]
 
 anillos <- function(ev) {   # estaciones con registro en el mes de la entrada, por anillo
-  s <- panel[ym == ev$g & station_key != ev$station_key & !is.na(lat)]
-  s[, km := as.vector(dist_km(ev$elat, ev$elon, lat, lon))]
-  s[, grupo := factor(GRUPOS[findInterval(km, c(0, RADIOS), left.open = TRUE)], levels = GRUPOS)]
-  s[km <= VENTANA_MAPA]
+  panel |>
+    filter(ym == ev$g, station_key != ev$station_key, !is.na(lat)) |>
+    mutate(km = as.vector(dist_km(ev$elat, ev$elon, lat, lon)),
+           grupo = factor(GRUPOS[findInterval(km, c(0, RADIOS), left.open = TRUE)], levels = GRUPOS)) |>
+     filter(km <= VENTANA_MAPA)
 }
-cuenta <- rbindlist(lapply(seq_len(nrow(e)), function(i) {
-  n <- table(anillos(e[i])$grupo)
-  data.table(i = i, minimo = min(n[1:4]), tratadas = sum(n[1:2]), total = sum(n))
-}))
-ev <- e[cuenta[minimo >= 1][order(-tratadas, -total)]$i[1]]
+cuenta <- map(seq_len(nrow(e)), function(i) {
+  n <- table(anillos(e[i, ])$grupo)
+  tibble(i = i, minimo = min(n[1:4]), tratadas = sum(n[1:2]), total = sum(n))
+}) |>
+  list_rbind()
+ev <- e[cuenta |> filter(minimo >= 1) |> arrange(desc(tratadas), desc(total)) |> pull(i) |> first(), ]
 s <- anillos(ev)
 message(sprintf("Gráfico 4: entrada %s (%s), %s", ev$station_key, ev$edist, ev$g))
 
@@ -83,17 +85,19 @@ guardar(fig, "grafico_04_caso_entrada.pdf", alto = 4.6, ancho = 4.2)
 # ==============================================================================
 
 ANIO_BASE <- 2013L
-d <- muestra_estacion(panel, CTRL_ESTRICTO, V$focal)[!is.na(p93)]
+d <- muestra_estacion(panel, CTRL_ESTRICTO, V$focal) |> filter(!is.na(p93))
 
-est <- d[year == ANIO_BASE, .(p93 = mean(p93, na.rm = TRUE), p97 = mean(p97, na.rm = TRUE), pdi = mean(pdi, na.rm = TRUE),
-                              n = mean(n_vecinas), treated = treated[1], comuna = comuna[1],
-                              distribuidor = distribuidor[1], region = region[1], d_autopista = d_autopista[1]),
-         by = station_key]
-est[, `:=`(copec = 100 * (distribuidor == "copec"), shell = 100 * (distribuidor == "shell"),
-           aramco = 100 * (distribuidor == "aramco_petrobras"),
-           otra = 100 * !(distribuidor %in% c("copec", "shell", "aramco_petrobras")),
-           rm = 100 * (region == "metropolitana"), autopista = 100 * (d_autopista <= AUTOPISTA_M))]
-est <- est[is.finite(p93)]   # las estaciones sin precio en 2013 quedan fuera de la tabla, no del modelo
+est <- d |>
+  filter(year == ANIO_BASE) |>
+  summarise(p93 = mean(p93, na.rm = TRUE), p97 = mean(p97, na.rm = TRUE), pdi = mean(pdi, na.rm = TRUE),
+            n = mean(n_vecinas), treated = treated[1], comuna = comuna[1],
+            distribuidor = distribuidor[1], region = region[1], d_autopista = d_autopista[1],
+            .by = station_key) |>
+  mutate(copec = 100 * (distribuidor == "copec"), shell = 100 * (distribuidor == "shell"),
+         aramco = 100 * (distribuidor == "aramco_petrobras"),
+         otra = 100 * !(distribuidor %in% c("copec", "shell", "aramco_petrobras")),
+         rm = 100 * (region == "metropolitana"), autopista = 100 * (d_autopista <= AUTOPISTA_M)) |>
+  filter(is.finite(p93))   # las estaciones sin precio en 2013 quedan fuera de la tabla, no del modelo
 
 VARS <- c(p93 = "Precio gasolina 93 (\\$/litro)", p97 = "Precio gasolina 97 (\\$/litro)",
           pdi = "Precio diésel (\\$/litro)", n = "Estaciones a 2 km o menos",
@@ -102,35 +106,37 @@ VARS <- c(p93 = "Precio gasolina 93 (\\$/litro)", p97 = "Precio gasolina 97 (\\$
           autopista = "A 100 m o menos de una autopista (\\%)")
 
 cuerpo <- unlist(lapply(names(VARS), function(v) {
-  x <- est[is.finite(get(v))]
+  x <- filter(est, is.finite(.data[[v]]))
   ct <- coeftable(feols(as.formula(sprintf("%s ~ treated", v)), data = x, cluster = ~comuna))["treated", ]
-  g <- x[, .(media = mean(get(v)), de = sd(get(v))), keyby = treated]
-  c(fila(VARS[[v]], sprintf("%.1f", g[treated == 1L, media]), sprintf("%.1f", g[treated == 0L, media]),
+  g <- x |> summarise(media = mean(.data[[v]]), de = sd(.data[[v]]), .by = treated)
+  g1 <- filter(g, treated == 1L); g0 <- filter(g, treated == 0L)
+  c(fila(VARS[[v]], sprintf("%.1f", g1$media), sprintf("%.1f", g0$media),
          sprintf("%.1f%s", ct[1], estrellas(ct[4])), sprintf("%.2f", ct[4])),
-    fila("", sprintf("(%.1f)", g[treated == 1L, de]), sprintf("(%.1f)", g[treated == 0L, de]),
+    fila("", sprintf("(%.1f)", g1$de), sprintf("(%.1f)", g0$de),
          sprintf("(%.1f)", ct[2]), ""))
 }))
 escribir_tabla("lcccc", c(fila("", "Tratadas", "Controles", "Diferencia", "Valor $p$"), "\\midrule",
                           cuerpo, "\\midrule",
-                          fila("Estaciones", est[treated == 1L, .N], est[treated == 0L, .N], "", "")),
+                          fila("Estaciones", sum(est$treated == 1L), sum(est$treated == 0L), "", "")),
                "tabla_03_descriptiva.tex")
 
 # ==============================================================================
 # Tabla C.1: composición de la muestra, paso a paso
 # ==============================================================================
 
-st <- panel[, .(base = base[1], role_entry = role_entry[1], g_entry = g_entry[1], g2_entry = g2_entry[1],
-                g5_entry = g5_entry[1], ultimo = max(ym)), by = station_key]
-inc <- st[base == TRUE]
-focal <- inc[role_entry == "treated" & year(g_entry) >= V$focal]
+st <- panel |>
+  summarise(base = base[1], role_entry = role_entry[1], g_entry = g_entry[1], g2_entry = g2_entry[1],
+            g5_entry = g5_entry[1], ultimo = max(ym), .by = station_key)
+inc <- filter(st, base == TRUE)
+focal <- filter(inc, role_entry == "treated", year(g_entry) >= V$focal)
 
 # mismos n que las tablas de resultados: estaciones que usa el modelo, sin singletons
 n_muestra <- function(roles) {
-  x <- muestra_estacion(panel, roles, V$focal)[!is.na(p93)]
+  x <- muestra_estacion(panel, roles, V$focal) |> filter(!is.na(p93))
   m <- estimar_es(x, "p93")
   message(sprintf("Tabla C.1: %s observaciones en la 93 con controles %s", format(nobs(m), big.mark = ","),
                   paste(roles, collapse = "+")))
-  list(con_precio = c(uniqueN(x[treated == 1L, station_key]), uniqueN(x[treated == 0L, station_key])),
+  list(con_precio = c(n_distinct(x$station_key[x$treated == 1L]), n_distinct(x$station_key[x$treated == 0L])),
        modelo = n_estaciones(m, x))
 }
 n_amplio <- n_muestra(CTRL_AMPLIO)
@@ -140,30 +146,30 @@ stopifnot(n_amplio$modelo[1] == n_estricto$modelo[1])
 # tratadas focales que dejan el panel (13 semanas sin reporte) a 24 meses o menos de la entrada,
 # antes de una segunda entrada y antes del último mes del panel
 FIN_PANEL <- max(panel$ym)
-sale <- focal[ultimo < FIN_PANEL & mi(ultimo) - mi(g_entry) <= 24L & (is.na(g2_entry) | ultimo < g2_entry)]
+sale <- filter(focal, ultimo < FIN_PANEL, mi(ultimo) - mi(g_entry) <= 24L, is.na(g2_entry) | ultimo < g2_entry)
 
 filas <- list(
   c("Estaciones observadas (2012--2026)", nrow(st)),
-  c("\\quad entrantes posteriores a 2012", st[base == FALSE, .N]),
+  c("\\quad entrantes posteriores a 2012", sum(st$base == FALSE)),
   c("\\quad presentes en 2012 (incumbentes)", nrow(inc)),
   c("Entradas registradas", nrow(entradas)),
-  c(sprintf("\\quad cohortes focales (%d en adelante)", V$focal), entradas[year(g) >= V$focal, .N]),
+  c(sprintf("\\quad cohortes focales (%d en adelante)", V$focal), sum(year(entradas$g) >= V$focal)),
   c("\\addlinespace\\emph{Incumbentes según la entrada más cercana}", ""),
-  c(sprintf("Tratadas (entrada competidora a %d km o menos)", R_TRATADA), inc[role_entry == "treated", .N]),
-  c("\\quad con su primera entrada a 2 km o menos en 2013 (fuera)", inc[role_entry == "treated" & year(g_entry) < V$focal, .N]),
+  c(sprintf("Tratadas (entrada competidora a %d km o menos)", R_TRATADA), sum(inc$role_entry == "treated")),
+  c("\\quad con su primera entrada a 2 km o menos en 2013 (fuera)", sum(inc$role_entry == "treated" & year(inc$g_entry) < V$focal)),
   c(sprintf("\\quad tratadas por una cohorte focal"), nrow(focal)),
   c("\\quad\\quad con precio de la 93", n_estricto$con_precio[1]),
   c("\\quad\\quad en la muestra de estimación de la 93", n_estricto$modelo[1]),
-  c(sprintf("Excluidas (entrada entre %d y %d km)", R_TRATADA, R_CTRL_AMP), inc[role_entry == "buffer", .N]),
-  c(sprintf("Excluidas (entrada de su propia marca a %d km o menos)", R_CTRL_AMP), inc[role_entry == "misma_marca", .N]),
-  c(sprintf("Control amplio (sin entradas a %d km o menos)", R_CTRL_AMP), inc[role_entry %in% CTRL_AMPLIO, .N]),
+  c(sprintf("Excluidas (entrada entre %d y %d km)", R_TRATADA, R_CTRL_AMP), sum(inc$role_entry == "buffer")),
+  c(sprintf("Excluidas (entrada de su propia marca a %d km o menos)", R_CTRL_AMP), sum(inc$role_entry == "misma_marca")),
+  c(sprintf("Control amplio (sin entradas a %d km o menos)", R_CTRL_AMP), sum(inc$role_entry %in% CTRL_AMPLIO)),
   c("\\quad en la muestra de estimación de la 93", n_amplio$modelo[2]),
-  c(sprintf("Control estricto (sin entradas a %d km o menos)", R_CTRL_EST), inc[role_entry %in% CTRL_ESTRICTO, .N]),
+  c(sprintf("Control estricto (sin entradas a %d km o menos)", R_CTRL_EST), sum(inc$role_entry %in% CTRL_ESTRICTO)),
   c("\\quad con precio de la 93", n_estricto$con_precio[2]),
   c("\\quad en la muestra de estimación de la 93", n_estricto$modelo[2]),
   c("\\addlinespace\\emph{Tratadas por una cohorte focal}", ""),
-  c(sprintf("con una segunda entrada competidora a %d km o menos (se cortan en ella)", R_TRATADA), focal[!is.na(g2_entry), .N]),
-  c(sprintf("con una entrada previa entre %d y %d km", R_TRATADA, R_CTRL_EST), focal[!is.na(g5_entry) & g5_entry < g_entry, .N]),
+  c(sprintf("con una segunda entrada competidora a %d km o menos (se cortan en ella)", R_TRATADA), sum(!is.na(focal$g2_entry))),
+  c(sprintf("con una entrada previa entre %d y %d km", R_TRATADA, R_CTRL_EST), sum(!is.na(focal$g5_entry) & focal$g5_entry < focal$g_entry)),
   c("que salen del panel a 24 meses o menos de la entrada", nrow(sale))
 )
 escribir_tabla("lr", c(fila("", "N"), "\\midrule", vapply(filas, function(f) fila(f[1], f[2]), "")),
@@ -173,10 +179,16 @@ escribir_tabla("lr", c(fila("", "N"), "\\midrule", vapply(filas, function(f) fil
 # Log (Sección 3): entradas desde 2014 por tipo de entrante
 # ==============================================================================
 
-ent14 <- entradas[year(g) >= V$focal]
-ent14[, tipo := fifelse(edist %in% MARCAS_MAYORES, "de marca", fifelse(edist == "sin bandera", "sin bandera", "marca pequeña"))]
+ent14 <- entradas |>
+  filter(year(g) >= V$focal) |>
+  mutate(tipo = if_else(edist %in% MARCAS_MAYORES, "de marca", if_else(edist == "sin bandera", "sin bandera", "marca pequeña")))
 message(sprintf("Entradas desde %d: %d; %s; %d marcas pequeñas distintas", V$focal, nrow(ent14),
-                paste(ent14[, .N, by = tipo][, sprintf("%s %d", tipo, N)], collapse = ", "), ent14[tipo == "marca pequeña", uniqueN(edist)]))
-message("Proporción independiente por período: ", paste(ent14[, .(p = mean(tipo != "de marca")), keyby = .(per = year(g) <= 2019L)][
-  , sprintf("%s %.2f", fifelse(per, "2014-2019", "2020-2026"), p)], collapse = ", "))
-print(ent14[tipo != "de marca", .N, by = eregion][order(-N)])
+                paste(summarise(ent14, N = n(), .by = tipo) |> mutate(txt = sprintf("%s %d", tipo, N)) |> pull(txt), collapse = ", "),
+                n_distinct(ent14$edist[ent14$tipo == "marca pequeña"])))
+message("Proporción independiente por período: ", paste(
+  ent14 |>
+    group_by(per = year(g) <= 2019L) |>
+    summarise(p = mean(tipo != "de marca")) |>
+    mutate(txt = sprintf("%s %.2f", if_else(per, "2014-2019", "2020-2026"), p)) |>
+    pull(txt), collapse = ", "))
+ent14 |> filter(tipo != "de marca") |> summarise(N = n(), .by = eregion) |> arrange(desc(N)) |> print()

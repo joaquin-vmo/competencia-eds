@@ -14,9 +14,9 @@
 
 source(here::here("code", "00_configuracion.R"))
 
-DESDE_ENTRADA <- as.IDate("2014-10-01")   # primer trimestre completo con costo MEPCO
-HASTA_ENTRADA <- as.IDate("2025-12-31")
-FIN_COSTO     <- as.IDate("2026-02-28")   # el 26-mar-2026 se desactiva la estabilización y el costo salta
+DESDE_ENTRADA <- as.Date("2014-10-01")   # primer trimestre completo con costo MEPCO
+HASTA_ENTRADA <- as.Date("2025-12-31")
+FIN_COSTO     <- as.Date("2026-02-28")   # el 26-mar-2026 se desactiva la estabilización y el costo salta
 K_SEMANAS     <- 68L   # semanas a cada lado de la entrada (cubre la ventana de un año del Gráfico B.4)
 DIAS_DESPUES  <- 6L    # días tras la actualización en que se mide el precio
 DIA_CORTE     <- 1L    # el día de actualización o el siguiente (Tabla 1)
@@ -25,60 +25,77 @@ VIGENCIA      <- 91L   # días máximos desde el último reporte (13 semanas, co
 
 # ---- Tratadas y controles estrictos ----
 
-est <- unique(fread(file.path(dir_ventana("2012_2026"), "panel_mensual.csv"),
-                    select = c("station_key", "region", "role_entry", "entrante_key", "fecha_entrante")),
-              by = "station_key")
-trat <- est[role_entry == "treated" & fecha_entrante >= DESDE_ENTRADA & fecha_entrante <= HASTA_ENTRADA,
-            .(station_key, region, fecha_e = as.IDate(fecha_entrante))]
-ctrl <- est[role_entry == "ctrl_b", .(station_key, region)]
+est <- leer_csv(file.path(dir_ventana("2012_2026"), "panel_mensual.csv"),
+               col_select = c(station_key, region, role_entry, entrante_key, fecha_entrante)) |>
+  distinct(station_key, .keep_all = TRUE)
+trat <- est |>
+  filter(role_entry == "treated", fecha_entrante >= DESDE_ENTRADA, fecha_entrante <= HASTA_ENTRADA) |>
+  select(station_key, region, fecha_e = fecha_entrante)
+ctrl <- est |> filter(role_entry == "ctrl_b") |> select(station_key, region)
 
 # ---- Actualizaciones del costo y precio diario ----
 
 # actualizaciones del costo de la 93
-costo <- fread(ruta_proc("costo_mepco.csv"))[, .(u = as.IDate(date), c = `93_w/`)]
-setorder(costo, u)
-costo[, dc := c - shift(c)]
-upd <- costo[!is.na(dc) & dc != 0 & u >= DESDE_ENTRADA & u <= FIN_COSTO, .(u, dc)]
+upd <- leer_csv(ruta_proc("costo_mepco.csv")) |>
+  transmute(u = date, c = `93_w/`) |>
+  arrange(u) |>
+  mutate(dc = c - lag(c)) |>
+  filter(!is.na(dc), dc != 0, u >= DESDE_ENTRADA, u <= FIN_COSTO) |>
+  select(u, dc)
 
 # precio del último reporte de cada día, por estación
-idn <- fread(ruta_proc("identidad_estaciones.csv"), select = c("id", "station_key"))
-p <- fread(ruta_proc("precios.csv"), select = c("id", "price", "date", "time", "fuel"),
-           colClasses = list(character = c("id", "fuel"), IDate = "date"))[fuel == "93"]
-p <- idn[p, on = "id", nomatch = NULL][station_key %in% c(trat$station_key, ctrl$station_key)]
-p[, time := as.ITime(time)]
-setorder(p, station_key, date, time, na.last = TRUE)
-p <- unique(p, by = c("station_key", "date"), fromLast = TRUE)[, .(station_key, date, price)]
-setkey(p, station_key, date)
+idn <- leer_csv(ruta_proc("identidad_estaciones.csv"), col_select = c(id, station_key))
+p <- leer_csv(ruta_proc("precios.csv"), col_select = c(id, price, date, time, fuel),
+              col_types = cols(id = "c", fuel = "c", date = "D")) |>
+  filter(fuel == "93") |>
+  inner_join(idn, by = "id") |>
+  filter(station_key %in% c(trat$station_key, ctrl$station_key)) |>
+  arrange(station_key, date, time) |>
+  filter(!duplicated(consecutive_id(station_key, date), fromLast = TRUE)) |>
+  select(station_key, date, price)
 
-vigente <- function(sk, d) p[data.table(station_key = sk, date = d), on = .(station_key, date), roll = VIGENCIA, x.price]
+# precio vigente: el del último reporte a lo más VIGENCIA días antes
+vigente <- function(sk, d) {
+  tibble(station_key = sk, d = d) |>
+    left_join(p, join_by(station_key, closest(d >= date))) |>
+    mutate(price = if_else(d - date <= VIGENCIA, price, NA)) |>
+    pull(price)
+}
 cambio_log <- function(x) {   # x: station_key, u
-  x[, `:=`(antes = vigente(station_key, u - 1L), corte = vigente(station_key, u + DIA_CORTE),
-           despues = vigente(station_key, u + DIAS_DESPUES))]
-  x[!is.na(antes) & !is.na(corte) & !is.na(despues),
-    .(station_key, u, antes, dlp = 100 * (log(despues) - log(antes)),
-      dlp_01 = 100 * (log(corte) - log(antes)), dlp_26 = 100 * (log(despues) - log(corte)))]
+  x |>
+    mutate(antes = vigente(station_key, u - 1L), corte = vigente(station_key, u + DIA_CORTE),
+           despues = vigente(station_key, u + DIAS_DESPUES)) |>
+    filter(!is.na(antes), !is.na(corte), !is.na(despues)) |>
+    transmute(station_key, u, antes, dlp = 100 * (log(despues) - log(antes)),
+              dlp_01 = 100 * (log(corte) - log(antes)), dlp_26 = 100 * (log(despues) - log(corte)))
 }
 
 # ---- Cambio de las tratadas frente a los controles de su región ----
 
 # tratadas: actualizaciones a +-K_SEMANAS de la entrada; k = semanas desde la entrada
-tu <- trat[, .(u = upd$u), by = .(station_key, fecha_e, region)]
-tu[, k := as.integer(u - fecha_e) %/% 7L]
-tu <- tu[abs(as.integer(u - fecha_e)) <= 7L * K_SEMANAS + 6L & k >= -K_SEMANAS & k <= K_SEMANAS]
-td <- cambio_log(tu[, .(station_key, u)])[tu, on = .(station_key, u), nomatch = NULL]
+tu <- cross_join(trat, select(upd, u)) |>
+  mutate(k = as.integer(u - fecha_e) %/% 7L) |>
+  filter(abs(as.integer(u - fecha_e)) <= 7L * K_SEMANAS + 6L, k >= -K_SEMANAS, k <= K_SEMANAS)
+td <- inner_join(tu, cambio_log(select(tu, station_key, u)), by = c("station_key", "u"))
 
 # controles de la misma región: cambio medio en cada actualización que usan las tratadas
-cc <- cambio_log(CJ(station_key = ctrl$station_key, u = unique(td$u)))[ctrl, on = "station_key", nomatch = NULL]
-cr <- cc[, .(dlp_cr = mean(dlp), dlp_01_cr = mean(dlp_01), dlp_26_cr = mean(dlp_26), n_cr = .N),
-         by = .(u, region)][n_cr >= MIN_CTRL_REG]
+cr <- expand_grid(station_key = sort(unique(ctrl$station_key), method = "radix"), u = sort(unique(td$u))) |>
+  cambio_log() |>
+  inner_join(ctrl, y = _, by = "station_key") |>
+  summarise(dlp_cr = mean(dlp), dlp_01_cr = mean(dlp_01), dlp_26_cr = mean(dlp_26), n_cr = n(), .by = c(u, region)) |>
+  filter(n_cr >= MIN_CTRL_REG)
 
-td <- cr[td, on = .(u, region)][upd, on = "u", nomatch = NULL]
 # NA si la región tiene menos de MIN_CTRL_REG controles
-td[, `:=`(dif_log_reg = dlp - dlp_cr, dif_01 = dlp_01 - dlp_01_cr, dif_26 = dlp_26 - dlp_26_cr)]
-stopifnot("las dos partes no suman el cambio total" = td[!is.na(dif_log_reg), all(abs(dif_01 + dif_26 - dif_log_reg) < 1e-8)])
-setorder(td, station_key, u)
+td <- td |>
+  left_join(cr, by = c("u", "region")) |>
+  inner_join(upd, by = "u") |>
+  mutate(dif_log_reg = dlp - dlp_cr, dif_01 = dlp_01 - dlp_01_cr, dif_26 = dlp_26 - dlp_26_cr) |>
+  arrange(station_key, u)
+stopifnot("las dos partes no suman el cambio total" =
+            with(filter(td, !is.na(dif_log_reg)), all(abs(dif_01 + dif_26 - dif_log_reg) < 1e-8)))
 
-fwrite(td[, .(station_key, region, fecha_e, u, k, dc, antes, dlp, dlp_cr, n_cr, dif_log_reg, dif_01, dif_26)],
-       ruta_proc("traspaso_actualizaciones.csv"))
-message(sprintf("05_traspaso.R: %d tratadas, %s tratada-actualizaciones", uniqueN(td$station_key),
+td |>
+  select(station_key, region, fecha_e, u, k, dc, antes, dlp, dlp_cr, n_cr, dif_log_reg, dif_01, dif_26) |>
+  escribir_csv(ruta_proc("traspaso_actualizaciones.csv"))
+message(sprintf("05_traspaso.R: %d tratadas, %s tratada-actualizaciones", n_distinct(td$station_key),
                 format(nrow(td), big.mark = ",")))

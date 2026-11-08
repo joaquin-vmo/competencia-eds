@@ -23,14 +23,16 @@ mensual <- muestra_estacion(leer_panel("2012_2026"), CTRL_ESTRICTO, focal)
 # solo las columnas que usa: el panel semanal tiene 4,6 millones de filas
 semanal <- leer_panel("2012_2026", "panel_semanal.csv.gz",
                       select = c("station_key", "fuel", "wi", "ym", "price", "comuna", "region", "distribuidor",
-                                 "role_entry", "g_entry", "g2_entry", "base", "entrante_semana"))[, miym := mi(ym)]
+                                 "role_entry", "g_entry", "g2_entry", "base", "entrante_semana")) |>
+  mutate(miym = mi(ym))
 d <- muestra_estacion(semanal, CTRL_ESTRICTO, focal)   # misma muestra que el mensual, con filas semanales
 rm(semanal)
-stopifnot("tratada sin semana de entrada" = !anyNA(d[treated == 1L, entrante_semana]))
-d[, rel := fifelse(treated == 1L, pmax(-NBIN, pmin(NBIN, (wi - entrante_semana) %/% SEM_BIN)), -1L)]
-d[, semana_e := SEMANA_0 + entrante_semana * 7L]
-d[, cohorte := fifelse(treated == 1L, year(semana_e) * 4L + (month(semana_e) - 1L) %/% 3L, 1000L)]   # trimestre
-d[, rel_sa := fifelse(treated == 1L, rel, -1000L)]
+stopifnot("tratada sin semana de entrada" = !anyNA(d$entrante_semana[d$treated == 1L]))
+d <- d |>
+  mutate(rel = if_else(treated == 1L, pmax(-NBIN, pmin(NBIN, (wi - entrante_semana) %/% SEM_BIN)), -1L),
+         semana_e = SEMANA_0 + entrante_semana * 7L) |>
+  mutate(cohorte = if_else(treated == 1L, year(semana_e) * 4L + (month(semana_e) - 1L) %/% 3L, 1000L),   # trimestre
+         rel_sa = if_else(treated == 1L, rel, -1000L))
 
 # ---- Estimación: mensual TWFE, semanal TWFE y semanal Sun y Abraham ----
 
@@ -41,19 +43,21 @@ sunab_identificado <- function(x, fml) {
   se <- coeftable(m)[, 2]
   malas <- unique(as.integer(sub(".*cohort::", "", names(se)[se > 100 * median(se)])))
   if (length(malas)) message("  sin identificar, fuera de Sun y Abraham: cohorte ", paste(malas, collapse = ", "))
-  feols(fml("sunab(cohorte, rel_sa)"), data = x[!cohorte %in% malas], cluster = ~comuna)
+  feols(fml("sunab(cohorte, rel_sa)"), data = filter(x, !cohorte %in% malas), cluster = ~comuna)
 }
 
-res <- rbindlist(lapply(names(FUEL), function(fv) {
+res <- map(names(FUEL), function(fv) {
   message(PRECIOS[[fv]])
-  x <- d[fuel == FUEL[[fv]] & !is.na(price)]
+  x <- filter(d, fuel == FUEL[[fv]], !is.na(price))
   fml <- function(rhs) as.formula(sprintf("log(price) * 100 ~ %s | %s", rhs, FE_SEM))
-  rbind(tidy_es(estimar_es(mensual[!is.na(get(fv))], fv))[, serie := SERIES[1]],
-        tidy_es(feols(fml("i(rel, treated, ref = -1)"), data = x, cluster = ~comuna))[, serie := SERIES[2]],
-        tidy_es(sunab_identificado(x, fml), "rel_sa")[, serie := SERIES[3]])[, combustible := PRECIOS[[fv]]]
-}))
-res[, `:=`(combustible = factor(combustible, levels = PRECIOS), serie = factor(serie, levels = SERIES))]
-print(res[, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)], nrows = Inf)   # cifras que cita el texto
+  bind_rows(tidy_es(estimar_es(filter(mensual, !is.na(.data[[fv]])), fv)) |> mutate(serie = SERIES[1]),
+            tidy_es(feols(fml("i(rel, treated, ref = -1)"), data = x, cluster = ~comuna)) |> mutate(serie = SERIES[2]),
+            tidy_es(sunab_identificado(x, fml), "rel_sa") |> mutate(serie = SERIES[3])) |>
+    mutate(combustible = PRECIOS[[fv]])
+}) |>
+  list_rbind() |>
+  mutate(combustible = factor(combustible, levels = PRECIOS), serie = factor(serie, levels = SERIES))
+res |> mutate(across(where(is.numeric), \(v) round(v, 3))) |> print(n = Inf)   # cifras que cita el texto
 # ---- Gráfico B.8 ----
 
 guardar(grafico_es(res, "serie", dodge = 0.6), "grafico_B08_panel_semanal.pdf", alto = 3.2)

@@ -30,27 +30,31 @@ MESES_VIDA <- 24L
 
 panel <- leer_panel("2012_2026")
 prep <- function(dd) {
-  dd[, post := as.integer(treated == 1L & ym >= g_evento)]
-  dd[, tipo := fifelse(treated == 1L, TIPOS[1L + !(entrante_marca %in% MARCAS_MAYORES)], NA_character_)]
-  dd[, independiente := as.integer(tipo %in% TIPOS[2])]
-  dd[, ent_cl := fifelse(treated == 1L, entrante_key, station_key)]   # cluster: la entrante; cada control el suyo
-  dd[, gtipo := fifelse(treated == 1L, independiente, NA_integer_)]
-  cohortes_sunab(dd, "gtipo")   # Sun y Abraham con un grupo por tipo: 0 de marca, 1 independiente
+  dd |>
+    mutate(post = as.integer(treated == 1L & ym >= g_evento),
+           tipo = if_else(treated == 1L, TIPOS[1L + !(entrante_marca %in% MARCAS_MAYORES)], NA_character_)) |>
+    mutate(independiente = as.integer(tipo %in% TIPOS[2]),
+           ent_cl = if_else(treated == 1L, entrante_key, station_key)) |>   # cluster: la entrante; cada control el suyo
+    mutate(gtipo = if_else(treated == 1L, independiente, NA_integer_)) |>
+    cohortes_sunab("gtipo")   # Sun y Abraham con un grupo por tipo: 0 de marca, 1 independiente
 }
 d <- prep(muestra_estacion(panel, CTRL_ESTRICTO, VENTANAS[["2012_2026"]]$focal))
 
 # características de la tratada antes de toda cohorte (2013) y de su entrante
-b13 <- d[year == 2013L, .(n13 = mean(n_vecinas), b_p93 = mean(p93_dev, na.rm = TRUE)), by = station_key]
-d <- b13[d, on = "station_key"]
-vida <- panel[, .(ini = min(miym), fin = max(miym)), by = station_key]
+b13 <- d |> filter(year == 2013L) |> summarise(n13 = mean(n_vecinas), b_p93 = mean(p93_dev, na.rm = TRUE), .by = station_key)
+vida <- panel |> summarise(ini = min(miym), fin = max(miym), .by = station_key)
 FIN <- max(vida$fin)
-d[vida, on = c(entrante_key = "station_key"), `:=`(ent_ini = i.ini, ent_fin = i.fin)]
-pe <- panel[station_key %in% unique(d$entrante_key)]
-pe <- pe[pe[, .I[miym <= min(miym) + 5L], by = station_key]$V1][
-  , .(ent_p93 = mean(p93_dev, na.rm = TRUE), ent_pdi = mean(pdi_dev, na.rm = TRUE)), by = station_key]
-d[pe, on = c(entrante_key = "station_key"), `:=`(ent_p93 = i.ent_p93, ent_pdi = i.ent_pdi)]
-mediana_tr <- function(v) median(unique(d[treated == 1L, c("station_key", v), with = FALSE])[[v]], na.rm = TRUE)
-d[, `:=`(densa = as.integer(treated == 1L & n13 > mediana_tr("n13")),
+pe <- panel |>
+  filter(station_key %in% unique(d$entrante_key)) |>
+  filter(miym <= min(miym) + 5L, .by = station_key) |>
+  summarise(ent_p93 = mean(p93_dev, na.rm = TRUE), ent_pdi = mean(pdi_dev, na.rm = TRUE), .by = station_key)
+d <- d |>
+  left_join(b13, by = "station_key") |>
+  left_join(rename(vida, entrante_key = station_key, ent_ini = ini, ent_fin = fin), by = "entrante_key") |>
+  left_join(rename(pe, entrante_key = station_key), by = "entrante_key")
+mediana_tr <- function(v) d |> filter(treated == 1L) |> select(station_key, all_of(v)) |> distinct() |> pull(all_of(v)) |> median(na.rm = TRUE)
+d <- d |>
+  mutate(densa = as.integer(treated == 1L & n13 > mediana_tr("n13")),
          barata = as.integer(treated == 1L & b_p93 <= mediana_tr("b_p93")),
          cerca = as.integer(treated == 1L & dist_entry <= 1),
          inc_mayor = as.integer(treated == 1L & distribuidor %in% MARCAS_MAYORES),
@@ -58,18 +62,18 @@ d[, `:=`(densa = as.integer(treated == 1L & n13 > mediana_tr("n13")),
          ent_autop = as.integer(treated == 1L & entrante_autopista %in% TRUE),
          rm = as.integer(region == "metropolitana"),
          ent_barata = as.integer(treated == 1L & ent_p93 < 0),   # NA: entrante sin precio de la 93 en sus 6 primeros meses
-         cohorte_anio = fifelse(treated == 1L, year(g_evento), 0L))]
-tr <- unique(d[treated == 1L], by = "station_key")
+         cohorte_anio = if_else(treated == 1L, year(g_evento), 0L))
+tr <- d |> filter(treated == 1L) |> distinct(station_key, .keep_all = TRUE)
 
 # ---- Tabla 8: composición de las tratadas por tipo de entrante ----
 
 pct <- function(x) sprintf("%.0f", 100 * mean(x, na.rm = TRUE))
 col_tipo <- function(t) {
-  x <- tr[tipo == t]
-  e <- unique(x, by = "entrante_key")
+  x <- filter(tr, tipo == t)
+  e <- distinct(x, entrante_key, .keep_all = TRUE)
   c(entrantes = nrow(e), tratadas = nrow(x), por_entrante = sprintf("%.1f", nrow(x) / nrow(e)),
-    max_entrante = max(x[, .N, by = entrante_key]$N),
-    c1416 = pct(year(x$g_evento) <= 2016L), c1719 = pct(year(x$g_evento) %between% c(2017L, 2019L)),
+    max_entrante = max(count(x, entrante_key)$n),
+    c1416 = pct(year(x$g_evento) <= 2016L), c1719 = pct(between(year(x$g_evento), 2017L, 2019L)),
     c2026 = pct(year(x$g_evento) >= 2020L),
     rm = pct(x$region == "metropolitana"), valpo = pct(x$region == "valparaiso"),
     maule_nuble = pct(x$region %in% c("maule", "nuble")), tarapaca = pct(x$region == "tarapaca"),
@@ -105,30 +109,30 @@ escribir_tabla("lcc", c(fila("", "Entrante de marca", "Entrante independiente"),
 # Sun y Abraham con un grupo por tipo; devuelve la diferencia independiente - de marca. Con otro
 # agrupamiento (`cl`) los grados de libertad son los grupos de ese agrupamiento menos uno.
 dif_sa <- function(x, fv, cl = NULL) {
-  z <- x[!is.na(get(fv))]
+  z <- filter(x, !is.na(.data[[fv]]))
   m <- estimar_sa(z, fv)
   if (!is.null(cl)) m <- summary(m, cluster = cl)
-  a <- att_sa(m, z)[efecto == "dif1"]
-  gl <- if (is.null(cl)) n_comunas(m, z) - 1L else min(sapply(all.vars(cl), function(v) uniqueN(z[obs(m)][[v]]))) - 1L
-  data.table(est = a$est, se = a$se, p = 2 * pt(-abs(a$est / a$se), gl))
+  a <- att_sa(m, z) |> filter(efecto == "dif1")
+  gl <- if (is.null(cl)) n_comunas(m, z) - 1L else min(sapply(all.vars(cl), function(v) n_distinct(z[[v]][obs(m)]))) - 1L
+  tibble(est = a$est, se = a$se, p = 2 * pt(-abs(a$est / a$se), gl))
 }
 
 # TWFE: post + post:independiente (+ extra); devuelve la diferencia, el efecto de marca y el de la independiente
 dif <- function(x, fv, extra = "", cl = ~comuna) {
   m <- feols(as.formula(sprintf("log(%s) * 100 ~ post + post:independiente%s | %s", fv, extra, FE_PRINCIPAL)),
-             data = x[!is.na(get(fv))], cluster = cl)
+             data = filter(x, !is.na(.data[[fv]])), cluster = cl)
   ct <- coeftable(m)
-  data.table(est = ct["post:independiente", 1], se = ct["post:independiente", 2], p = ct["post:independiente", 4],
-             marca = ct["post", 1], ind = sum(coef(m)[c("post", "post:independiente")]))
+  tibble(est = ct["post:independiente", 1], se = ct["post:independiente", 2], p = ct["post:independiente", 4],
+         marca = ct["post", 1], ind = sum(coef(m)[c("post", "post:independiente")]))
 }
 
 # permutación del tipo entre las entrantes (libre o dentro de la región de la tratada). Cada permutación
 # es una regresión con los mismos efectos fijos: se centran una vez todas las columnas (FWL).
-ent <- unique(tr[, .(entrante_key, independiente, region)], by = "entrante_key")
+ent <- tr |> select(entrante_key, independiente, region) |> distinct(entrante_key, .keep_all = TRUE)
 perm_p <- function(fv, estrato) {
-  z <- d[!is.na(get(fv))]
+  z <- filter(d, !is.na(.data[[fv]]))
   idx <- match(z$entrante_key, ent$entrante_key)
-  fe <- z[, .(station_key, ym, ry = paste(region, year), dy = paste(distribuidor, year))]
+  fe <- z |> transmute(station_key, ym, ry = paste(region, year), dy = paste(distribuidor, year))
   X <- demean(cbind(y = log(z[[fv]]) * 100, post = z$post, obs = z$post * z$independiente), fe)
   res_post <- function(v) resid(lm.fit(X[, "post", drop = FALSE], v))
   ry <- res_post(X[, "y"])
@@ -138,7 +142,7 @@ perm_p <- function(fv, estrato) {
   # en bloques de 200 permutaciones: la matriz completa no cabe en 8 GB
   b <- unlist(lapply(split(seq_len(NPERM), ceiling(seq_len(NPERM) / 200)), function(bloque) {
     P <- vapply(bloque, function(k) {
-      lab <- if (estrato) copy(ent)[, ind := sample(independiente), by = region]$ind else sample(ent$independiente)
+      lab <- if (estrato) mutate(ent, ind = sample(independiente), .by = region)$ind else sample(ent$independiente)
       lab[idx]
     }, numeric(nrow(z)))
     P[is.na(P)] <- 0
@@ -147,17 +151,19 @@ perm_p <- function(fv, estrato) {
   mean(abs(b) >= abs(b0))
 }
 
-reg_ambos <- tr[, uniqueN(tipo), by = region][V1 == 2L, region]
-top5 <- tr[independiente == 1L, .N, by = entrante_key][order(-N)][1:5, entrante_key]
+reg_ambos <- tr |> summarise(n = n_distinct(tipo), .by = region) |> filter(n == 2L) |> pull(region)
+top5 <- tr |> filter(independiente == 1L) |> summarise(N = n(), .by = entrante_key) |> arrange(desc(N)) |> slice(1:5) |> pull(entrante_key)
 EXTRA_CAR <- " + post:densa + post:barata + post:cerca + post:inc_mayor + post:inc_autop + post:ent_autop + post:rm"
 amplio <- prep(muestra_estacion(panel, CTRL_AMPLIO, VENTANAS[["2012_2026"]]$focal))
 # a 1 km: tratadas cuya primera entrada a <= 1 km es la de 2 km (mismo mes y entrante a <= 1 km)
-r1 <- prep(muestra_estacion(panel, CTRL_ESTRICTO, VENTANAS[["2012_2026"]]$focal, radio = 1))
-r1 <- r1[treated == 0L | (g_evento == g_entry & dist_entry <= 1)]
-plac <- copy(d)[treated == 0L | ym < g_evento][, g_evento := mi2date(mi(g_evento) - 24L)]
-plac[, post := as.integer(treated == 1L & ym >= g_evento)]
-plac[, rel := fifelse(treated == 1L, pmax(-NBIN, pmin(NBIN, (miym - mi(g_evento)) %/% BIN_M)), -1L)]
-plac <- cohortes_sunab(plac, "gtipo")
+r1 <- prep(muestra_estacion(panel, CTRL_ESTRICTO, VENTANAS[["2012_2026"]]$focal, radio = 1)) |>
+  filter(treated == 0L | (g_evento == g_entry & dist_entry <= 1))
+plac <- d |>
+  filter(treated == 0L | ym < g_evento) |>
+  mutate(g_evento = mi2date(mi(g_evento) - 24L)) |>
+  mutate(post = as.integer(treated == 1L & ym >= g_evento),
+         rel = if_else(treated == 1L, pmax(-NBIN, pmin(NBIN, (miym - mi(g_evento)) %/% BIN_M)), -1L)) |>
+  cohortes_sunab("gtipo")
 
 PRUEBAS <- list(
   list("\\emph{Inferencia (Sun y Abraham)}", NULL),
@@ -172,13 +178,13 @@ PRUEBAS <- list(
   list("Entrante que abre bajo la media nacional$^b$", function(fv) dif(d, fv, " + post:ent_barata")),
   list("Región, año de la cohorte y características", function(fv) dif(d, fv, paste0(" + i(region, post) + i(cohorte_anio, post, ref = 0)", EXTRA_CAR))),
   list("\\addlinespace\\emph{Muestra (Sun y Abraham)}", NULL),
-  list("Solo incumbentes de Copec, Shell o Aramco", function(fv) dif_sa(d[treated == 0L | inc_mayor == 1L], fv)),
-  list("Cohortes 2014--2019", function(fv) dif_sa(d[treated == 0L | year(g_evento) <= 2019L], fv)),
-  list("Cohortes 2015--2017", function(fv) dif_sa(d[treated == 0L | year(g_evento) %between% c(2015L, 2017L)], fv)),
-  list(sprintf("Solo regiones con tratadas de ambos tipos (%d)", length(reg_ambos)), function(fv) dif_sa(d[region %in% reg_ambos], fv)),
-  list("Sin las cinco entrantes independientes que más tratan", function(fv) dif_sa(d[!entrante_key %in% top5], fv)),
+  list("Solo incumbentes de Copec, Shell o Aramco", function(fv) dif_sa(filter(d, treated == 0L | inc_mayor == 1L), fv)),
+  list("Cohortes 2014--2019", function(fv) dif_sa(filter(d, treated == 0L | year(g_evento) <= 2019L), fv)),
+  list("Cohortes 2015--2017", function(fv) dif_sa(filter(d, treated == 0L | between(year(g_evento), 2015L, 2017L)), fv)),
+  list(sprintf("Solo regiones con tratadas de ambos tipos (%d)", length(reg_ambos)), function(fv) dif_sa(filter(d, region %in% reg_ambos), fv)),
+  list("Sin las cinco entrantes independientes que más tratan", function(fv) dif_sa(filter(d, !entrante_key %in% top5), fv)),
   list(sprintf("Solo entrantes que siguen en el panel %d meses o más", MESES_VIDA),
-       function(fv) dif_sa(d[treated == 0L | ent_fin == FIN | ent_fin - ent_ini >= MESES_VIDA], fv)),
+       function(fv) dif_sa(filter(d, treated == 0L | ent_fin == FIN | ent_fin - ent_ini >= MESES_VIDA), fv)),
   list("Control amplio (sin entradas a 3 km o menos)", function(fv) dif_sa(amplio, fv)),
   list("Tratadas a 1 km o menos de la entrante", function(fv) dif_sa(r1, fv)),
   list("\\addlinespace\\emph{Placebo (Sun y Abraham)}", NULL),
@@ -187,11 +193,11 @@ PRUEBAS <- list(
 cuerpo <- unlist(lapply(PRUEBAS, function(pr) {
   if (is.null(pr[[2]])) return(sprintf("%s\\multicolumn{3}{l}{%s} \\\\", if (startsWith(pr[[1]], "\\addlinespace")) "\\addlinespace " else "",
                                        sub("^\\\\addlinespace", "", pr[[1]])))
-  r <- rbindlist(lapply(names(FV), pr[[2]]), fill = TRUE)
+  r <- list_rbind(map(names(FV), pr[[2]]))
   message(sprintf("Tabla 9, %s: %s", pr[[1]], paste(sprintf("%.3f (%.3f)", r$est, r$se), collapse = " | ")))
   fila(paste0("\\quad ", pr[[1]]), sprintf("%.3f%s (%.3f)", r$est, estrellas(r$p), r$se))   # una fila por prueba: la tabla cabe en una página
 }))
-p_perm <- function(p) fifelse(p == 0, sprintf("$<$%.4f", 1 / NPERM), sprintf("%.4f", p))   # ninguna permutación la alcanza
+p_perm <- function(p) if_else(p == 0, sprintf("$<$%.4f", 1 / NPERM), sprintf("%.4f", p))   # ninguna permutación la alcanza
 pp <- sapply(names(FV), function(fv) c(perm_p(fv, FALSE), perm_p(fv, TRUE)))
 cuerpo <- append(cuerpo, c(fila("\\quad Valor $p$ por permutación del tipo entre entrantes (TWFE)", p_perm(pp[1, ])),
                            fila("\\quad Valor $p$ por permutación dentro de región (TWFE)", p_perm(pp[2, ]))),
@@ -201,32 +207,35 @@ escribir_tabla("lcc", c(fila("", unname(FV)), "\\midrule", cuerpo), "tabla_09_ro
 # ---- Tabla C.14: efecto por marca de la entrante ----
 
 SUB <- c(copec = "Copec", shell = "Shell", aramco_petrobras = "Aramco", pequena = "Marca pequeña", sin_bandera = "Sin bandera")
-d[, sub := fifelse(treated == 0L, "control",
-                   fifelse(entrante_marca == "enex", "shell",
-                           fifelse(entrante_marca %in% MARCAS_MAYORES, entrante_marca,
-                                   fifelse(entrante_marca == "sin bandera", "sin_bandera", "pequena"))))]
-d[, gsub := fifelse(treated == 1L, match(sub, names(SUB)) - 1L, NA_integer_)]
-xs <- cohortes_sunab(copy(d), "gsub")
-ms <- lapply(names(PRECIOS), function(fv) estimar_sa(xs[!is.na(get(fv))], fv))
-as <- mapply(function(m, fv) att_sa(m, xs[!is.na(get(fv))]), ms, names(PRECIOS), SIMPLIFY = FALSE)
+d <- d |>
+  mutate(sub = if_else(treated == 0L, "control",
+                       if_else(entrante_marca == "enex", "shell",
+                               if_else(entrante_marca %in% MARCAS_MAYORES, entrante_marca,
+                                       if_else(entrante_marca == "sin bandera", "sin_bandera", "pequena"))))) |>
+  mutate(gsub = if_else(treated == 1L, match(sub, names(SUB)) - 1L, NA_integer_))
+xs <- cohortes_sunab(d, "gsub")
+ms <- map(names(PRECIOS), \(fv) estimar_sa(filter(xs, !is.na(.data[[fv]])), fv))
+as <- map2(ms, names(PRECIOS), \(m, fv) att_sa(m, filter(xs, !is.na(.data[[fv]]))))
 cuerpo <- unlist(lapply(seq_along(SUB), function(j) {
   s <- names(SUB)[j]
-  ct <- rbindlist(lapply(as, function(a) a[efecto == paste0("grupo", j - 1L)]))
-  filas_coef(sprintf("%s (%d entrantes, %d tratadas)", SUB[[s]], d[treated == 1L & sub == s, uniqueN(entrante_key)],
-                     d[treated == 1L & sub == s, uniqueN(station_key)]), ct$est, ct$se, ct$p)
+  ct <- list_rbind(map(as, \(a) filter(a, efecto == paste0("grupo", j - 1L))))
+  filas_coef(sprintf("%s (%d entrantes, %d tratadas)", SUB[[s]], n_distinct(d$entrante_key[d$treated == 1L & d$sub == s]),
+                     n_distinct(d$station_key[d$treated == 1L & d$sub == s])), ct$est, ct$se, ct$p)
 }))
 escribir_tabla("lcccc", c(fila("", unname(PRECIOS)), "\\midrule", cuerpo, "\\midrule",
-                          fila("Controles", mapply(function(m, fv) n_estaciones(m, xs[!is.na(get(fv))])[2], ms, names(PRECIOS)))),
+                          fila("Controles", map2_int(ms, names(PRECIOS), \(m, fv) n_estaciones(m, filter(xs, !is.na(.data[[fv]])))[2]))),
                "tabla_C14_subtipo_entrante.tex")
 
 # ---- Gráfico B.19: la diferencia sacando cada entrante independiente y cada región ----
 
-fuera <- rbindlist(lapply(names(FV), function(fv) rbind(
-  rbindlist(lapply(unique(tr[independiente == 1L, entrante_key]), function(k) dif_sa(d[!entrante_key %in% k], fv)[, quita := "Una entrante independiente"])),
-  rbindlist(lapply(sort(unique(tr$region)), function(r) dif_sa(d[region != r], fv)[, quita := "Una región"])))[, combustible := FV[[fv]]]))
-print(fuera[, .(min = round(min(est), 3), max = round(max(est), 3), t_max = round(max(est / se), 2)), by = .(combustible, quita)])
-base <- rbindlist(lapply(names(FV), function(fv) dif_sa(d, fv)[, combustible := FV[[fv]]]))
-fuera[, orden := frank(est, ties.method = "first"), by = .(combustible, quita)]
+fuera <- map(names(FV), function(fv) bind_rows(
+  map(unique(tr$entrante_key[tr$independiente == 1L]), \(k) dif_sa(filter(d, !entrante_key %in% k), fv) |> mutate(quita = "Una entrante independiente")) |> list_rbind(),
+  map(sort(unique(tr$region)), \(r) dif_sa(filter(d, region != r), fv) |> mutate(quita = "Una región")) |> list_rbind()) |>
+    mutate(combustible = FV[[fv]])) |>
+  list_rbind()
+fuera |> summarise(min = round(min(est), 3), max = round(max(est), 3), t_max = round(max(est / se), 2), .by = c(combustible, quita)) |> print()
+base <- map(names(FV), \(fv) dif_sa(d, fv) |> mutate(combustible = FV[[fv]])) |> list_rbind()
+fuera <- mutate(fuera, orden = rank(est, ties.method = "first"), .by = c(combustible, quita))
 fig <- ggplot(fuera, aes(orden, est)) +
   geom_hline(yintercept = 0, colour = COLOR_REF) +
   geom_hline(data = base, aes(yintercept = est), linetype = "dashed", colour = COLOR_REF) +

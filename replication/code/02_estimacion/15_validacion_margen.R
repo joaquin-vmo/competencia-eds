@@ -12,8 +12,8 @@ source(here::here("code", "00_configuracion.R"))
 
 REF_LAT <- -33.43005126196647   # coordenadas CNE de pb1312301, Av. Tobalaba 1895
 REF_LON <- -70.58694630861282
-DESDE   <- as.IDate("2018-08-01")
-HASTA   <- as.IDate("2019-07-01")
+DESDE   <- as.Date("2018-08-01")
+HASTA   <- as.Date("2019-07-01")
 MARCAS  <- c(copec = "Copec", aramco_petrobras = "Petrobras", shell = "Shell")
 # participaciones nacionales en volumen (FNE 2025) de los combustibles con costo MEPCO
 W <- c(p93 = 16.0, p97 = 3.3, pdi = 52.5)
@@ -27,30 +27,31 @@ FNE <- list(Copec     = c("5--10\\% (40--50)", "5--10\\% (50--60)", "5--10\\% (4
 
 # ---- Estaciones a menos de 5 km de la ex Sesa ----
 
-d <- leer_panel("2012_2026")[ym >= DESDE & ym <= HASTA & distribuidor %in% names(MARCAS)]
-d[, km := as.vector(dist_km(REF_LAT, REF_LON, lat, lon))]
-d <- d[km > 0.01 & km < 5]   # la estación no es rival de sí misma
-d[, `:=`(anillo = floor(km), marca = factor(MARCAS[distribuidor], levels = MARCAS))]
+d <- leer_panel("2012_2026") |>
+  filter(ym >= DESDE, ym <= HASTA, distribuidor %in% names(MARCAS)) |>
+  mutate(km = as.vector(dist_km(REF_LAT, REF_LON, lat, lon))) |>
+  filter(km > 0.01, km < 5) |>   # la estación no es rival de sí misma
+  mutate(anillo = floor(km), marca = factor(unname(MARCAS[distribuidor]), levels = MARCAS))
 
 # ---- Margen ponderado por volumen ----
 
-num <- Reduce(`+`, lapply(names(W), function(f) W[[f]] * fcoalesce(d[[MARGEN[[f]]]], 0)))
-den <- Reduce(`+`, lapply(names(W), function(f) W[[f]] * fifelse(is.na(d[[MARGEN[[f]]]]), 0, d[[f]])))
-wd  <- Reduce(`+`, lapply(names(W), function(f) W[[f]] * !is.na(d[[MARGEN[[f]]]])))
-d[, `:=`(pct = 100 * num / den, pesos = num / wd)]
+num <- Reduce(`+`, map(names(W), function(f) W[[f]] * coalesce(d[[MARGEN[[f]]]], 0)))
+den <- Reduce(`+`, map(names(W), function(f) W[[f]] * if_else(is.na(d[[MARGEN[[f]]]]), 0, d[[f]])))
+wd  <- Reduce(`+`, map(names(W), function(f) W[[f]] * !is.na(d[[MARGEN[[f]]]])))
+d <- mutate(d, pct = 100 * num / den, pesos = num / wd)
 
 # ---- Tabla C.2: margen por anillo frente al informe de la FNE ----
 
-agr <- d[is.finite(pct), .(pct = mean(pct), pesos = mean(pesos)), keyby = .(anillo, marca)]
+agr <- d |> filter(is.finite(pct)) |> summarise(pct = mean(pct), pesos = mean(pesos), .by = c(anillo, marca))
 celda <- function(m, a) {
-  r <- agr[marca == m & anillo == a]
+  r <- filter(agr, marca == m, anillo == a)
   if (nrow(r)) sprintf("%.1f\\%% (%.0f)", r$pct, r$pesos) else "--"
 }
 escribir_tabla("lcccccc",
                c(fila("", sprintf("\\multicolumn{2}{c}{%s}", MARCAS)),
                  "\\cmidrule(lr){2-3} \\cmidrule(lr){4-5} \\cmidrule(lr){6-7}",
                  fila("Anillo", rep(c("Este trabajo", "FNE"), 3)), "\\midrule",
-                 vapply(0:4, function(a) fila(sprintf("%d--%d km", a, a + 1),
-                                              c(rbind(vapply(MARCAS, celda, "", a = a),
-                                                      vapply(MARCAS, function(m) FNE[[m]][a + 1], "")))), "")),
+                 map_chr(0:4, function(a) fila(sprintf("%d--%d km", a, a + 1),
+                                              c(rbind(map_chr(MARCAS, celda, a = a),
+                                                      map_chr(MARCAS, function(m) FNE[[m]][a + 1])))))),
                "tabla_C02_validacion_margen.tex")

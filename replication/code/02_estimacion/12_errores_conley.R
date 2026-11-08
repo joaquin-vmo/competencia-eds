@@ -16,13 +16,15 @@ VCOV <- list(Comuna = ~comuna,
 # ---- Estimación con cada tipo de error estándar ----
 
 d <- cohortes_sunab(muestra_estacion(leer_panel("2012_2026"), CTRL_ESTRICTO, VENTANAS[["2012_2026"]]$focal))
-res <- rbindlist(lapply(names(PRECIOS), function(fv) {
-  m <- estimar_sa(d[!is.na(get(fv))], fv)
-  rbindlist(lapply(names(VCOV), function(v) tidy_es(summary(m, vcov = VCOV[[v]]), "per")[, errores := v]))[
-    , combustible := PRECIOS[[fv]]]
-}))
-res[, `:=`(combustible = factor(combustible, levels = PRECIOS), errores = factor(errores, levels = names(VCOV)))]
-print(res[, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)], nrows = Inf)   # cifras que cita el texto
+res <- map(names(PRECIOS), function(fv) {
+  m <- estimar_sa(filter(d, !is.na(.data[[fv]])), fv)
+  map(names(VCOV), \(v) tidy_es(summary(m, vcov = VCOV[[v]]), "per") |> mutate(errores = v)) |>
+    list_rbind() |>
+    mutate(combustible = PRECIOS[[fv]])
+}) |>
+  list_rbind() |>
+  mutate(combustible = factor(combustible, levels = PRECIOS), errores = factor(errores, levels = names(VCOV)))
+res |> mutate(across(where(is.numeric), \(v) round(v, 3))) |> print(n = Inf)   # cifras que cita el texto
 # ---- Gráfico B.7 ----
 
 guardar(grafico_es(res, "errores", dodge = 0.5), "grafico_B07_conley.pdf", alto = 3.2)

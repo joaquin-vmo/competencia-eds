@@ -22,28 +22,31 @@ DISENOS <- list(anillos = list(cortes = 0:5, archivo = "grafico_B21_es_independi
                 tramos = list(cortes = c(0, 2, 5, 10), archivo = "grafico_B22_es_independientes_tramos.pdf"))
 
 panel <- leer_panel("2012_2026")
-entradas <- fread(file.path(dir_ventana("2012_2026"), "entradas.csv"))[, g := as.IDate(g)]
+entradas <- leer_csv(file.path(dir_ventana("2012_2026"), "entradas.csv")) |> mutate(g = as.Date(g))
 
 for (dz in names(DISENOS)) {
   cortes <- DISENOS[[dz]]$cortes
   R <- max(cortes)
   ANILLOS <- sprintf("%g a %g km", head(cortes, -1), cortes[-1])
-  d <- muestra_anillos(panel, entradas, cortes, V$focal)[treated == 0L | indep == 1L]   # solo entradas independientes
-  a <- unique(d[treated == 1L, .(station_key, anillo)])
-  controles <- d[treated == 0L, unique(station_key)]
+  d <- muestra_anillos(panel, entradas, cortes, V$focal) |>
+    filter(treated == 0L | indep == 1L)   # solo entradas independientes
+  a <- d |> filter(treated == 1L) |> distinct(station_key, anillo)
+  controles <- unique(d$station_key[d$treated == 0L])
   d <- cohortes_sunab(d, "anillo")
   message(sprintf("Diseño %s: tratadas por anillo %s; %d controles (sin entradas a <= %g km)", dz,
-                  paste(sprintf("%s: %d", ANILLOS, a[, .N, keyby = anillo]$N), collapse = ", "), length(controles), R))
-  res <- rbindlist(lapply(names(PRECIOS), function(fv) {
-    z <- d[!is.na(get(fv))]
+                  paste(sprintf("%s: %d", ANILLOS, count(a, anillo)$n), collapse = ", "), length(controles), R))
+  res <- map(names(PRECIOS), function(fv) {
+    z <- filter(d, !is.na(.data[[fv]]))
     m <- estimar_sa(z, fv)
-    at <- att_sa(m, z)[startsWith(efecto, "grupo")]
+    at <- att_sa(m, z) |> filter(startsWith(efecto, "grupo"))
     message(sprintf("  %s: ATT %s; valor p bins previos %s", PRECIOS[[fv]],
                     paste(sprintf("%s %.3f (%.3f)", ANILLOS, at$est, at$se), collapse = "; "),
-                    paste(sapply(seq_along(ANILLOS) - 1L, function(g) p_previos(m, "per", z, g)), collapse = "/")))
-    agregar_sa(m, z)[, `:=`(anillo = factor(ANILLOS[grupo + 1L], levels = ANILLOS), combustible = factor(PRECIOS[[fv]], levels = PRECIOS))]
-  }))
-  print(dcast(res, combustible + event_time ~ anillo, value.var = "estimate", fun.aggregate = function(v) round(v, 3)), nrows = Inf)
+                    paste(map_chr(seq_along(ANILLOS) - 1L, \(g) p_previos(m, "per", z, g)), collapse = "/")))
+    agregar_sa(m, z) |> mutate(anillo = factor(ANILLOS[grupo + 1L], levels = ANILLOS), combustible = factor(PRECIOS[[fv]], levels = PRECIOS))
+  }) |>
+    list_rbind()
+  res |> pivot_wider(id_cols = c(combustible, event_time), names_from = anillo, values_from = estimate) |>
+    arrange(combustible, event_time) |> mutate(across(where(is.numeric), \(v) round(v, 3))) |> print(n = Inf)
   fig <- grafico_es(res, "anillo", dodge = 0.6) +
     scale_colour_manual(values = c(COLORES, "grey45")) + scale_shape_manual(values = c(FORMAS, 18)) +
     labs(colour = "Entrada independiente a", shape = "Entrada independiente a")

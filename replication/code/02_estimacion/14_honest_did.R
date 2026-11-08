@@ -38,7 +38,7 @@ sensibilidad <- function(z, y) {
   n_post <- length(nm) - n_pre
   n <- n_estaciones(m, z)
 
-  rbindlist(lapply(names(HORIZONTES), function(h) {
+  map(names(HORIZONTES), function(h) {
     lv <- replace(numeric(n_post), HORIZONTES[[h]], 1)
     est <- sum(lv * b[-seq_len(n_pre)])
     ee <- sqrt(drop(t(lv) %*% V[-seq_len(n_pre), -seq_len(n_pre)] %*% lv))
@@ -53,25 +53,26 @@ sensibilidad <- function(z, y) {
       while (hi - lo > 1L) { mid <- (lo + hi) %/% 2L; if (excluye_cero(MBAR[mid])) lo <- mid else hi <- mid }
       MBAR[lo]
     }
-    data.table(y = y, horizonte = h, est = est, lb = est - qnorm(1 - ALPHA / 2) * ee,
-               ub = est + qnorm(1 - ALPHA / 2) * ee, quiebre = quiebre, tratadas = n[1], controles = n[2])
-  }))
+    tibble(y = y, horizonte = h, est = est, lb = est - qnorm(1 - ALPHA / 2) * ee,
+           ub = est + qnorm(1 - ALPHA / 2) * ee, quiebre = quiebre, tratadas = n[1], controles = n[2])
+  }) |>
+    list_rbind()
 }
 
-res <- rbindlist(lapply(names(PRECIOS), function(fv) sensibilidad(d[!is.na(get(fv))], fv)))
+res <- map(names(PRECIOS), \(fv) sensibilidad(filter(d, !is.na(.data[[fv]])), fv)) |> list_rbind()
 
 # ---- Tabla C.7 ----
 
-fmt_quiebre <- function(q) fifelse(q == 0, sprintf("$<$%.2f", MBAR[1]),
-                                   fifelse(is.infinite(q), sprintf("$>$%.0f", max(MBAR)), sprintf("%.2f", q)))
+fmt_quiebre <- function(q) if_else(q == 0, sprintf("$<$%.2f", MBAR[1]),
+                                   if_else(is.infinite(q), sprintf("$>$%.0f", max(MBAR)), sprintf("%.2f", q)))
 cuerpo <- unlist(lapply(names(HORIZONTES), function(h) {
-  r <- res[horizonte == h][match(names(PRECIOS), y)]
+  r <- res |> filter(horizonte == h) |> slice(match(names(PRECIOS), y))
   c(sprintf("\\multicolumn{5}{l}{\\emph{%s}} \\\\", ETIQUETA[[h]]),
     fila("\\quad Estimador", sprintf("%.3f", r$est)),
     fila("\\quad IC 95\\%", sprintf("[%.3f; %.3f]", r$lb, r$ub)),
     fila("\\quad $\\bar{M}$ de quiebre", fmt_quiebre(r$quiebre)))
 }))
-r1 <- res[horizonte == "impacto"][match(names(PRECIOS), y)]
+r1 <- res |> filter(horizonte == "impacto") |> slice(match(names(PRECIOS), y))
 escribir_tabla("lcccc", c(fila("", unname(PRECIOS)), "\\midrule", cuerpo, "\\midrule",
                           fila("Tratadas", r1$tratadas), fila("Controles", r1$controles)),
                "tabla_C07_honest_did.tex")

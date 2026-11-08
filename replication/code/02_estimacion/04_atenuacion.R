@@ -27,20 +27,21 @@ RADIOS <- sort(c(RADIOS_EXTRA, R_TRATADA, R_CTRL_EST))
 V <- VENTANAS[["2012_2026"]]
 
 panel <- leer_panel("2012_2026")
-entradas <- fread(file.path(dir_ventana("2012_2026"), "entradas.csv"))[, g := as.IDate(g)]
-da <- muestra_anillos(panel, entradas, CORTES, V$focal)
-da <- da[treated == 0L | (miym - mi(g_evento)) %between% c(-BIN_M, BIN_M - 1L)]   # primeros BIN_M meses
-da[, anillo_tipo := anillo * 2L + indep]
+entradas <- leer_csv(file.path(dir_ventana("2012_2026"), "entradas.csv")) |> mutate(g = as.Date(g))
+da <- muestra_anillos(panel, entradas, CORTES, V$focal) |>
+  filter(treated == 0L | between(miym - mi(g_evento), -BIN_M, BIN_M - 1L)) |>   # primeros BIN_M meses
+  mutate(anillo_tipo = anillo * 2L + indep)
 
 # ATT de cada grupo en una regresión de Sun y Abraham
 att_anillos <- function(fv, grupo) {
-  z <- cohortes_sunab(copy(da)[!is.na(get(fv))], grupo)
+  z <- cohortes_sunab(filter(da, !is.na(.data[[fv]])), grupo)
   m <- estimar_sa(z, fv)
-  a <- att_sa(m, z)[startsWith(efecto, "grupo")][, codigo := as.integer(sub("grupo", "", efecto))]
-  u <- z[obs(m)]
+  a <- att_sa(m, z) |> filter(startsWith(efecto, "grupo")) |> mutate(codigo = as.integer(sub("grupo", "", efecto)))
+  u <- slice(z, obs(m))
   message(sprintf("%s, %s: tratadas por grupo %s; %d controles", grupo, PRECIOS[[fv]],
-                  paste(u[treated == 1L, uniqueN(station_key), keyby = c(grupo)]$V1, collapse = "/"), n_estaciones(m, z)[2]))
-  a[, .(codigo, estimate = est, se, p, combustible = factor(PRECIOS[[fv]], levels = PRECIOS), fv = fv, gl = n_comunas(m, z) - 1L)]
+                  paste(u |> filter(treated == 1L) |> summarise(n = n_distinct(station_key), .by = all_of(grupo)) |>
+                          arrange(.data[[grupo]]) |> pull(n), collapse = "/"), n_estaciones(m, z)[2]))
+  a |> transmute(codigo, estimate = est, se, p, combustible = factor(PRECIOS[[fv]], levels = PRECIOS), fv = fv, gl = n_comunas(m, z) - 1L)
 }
 fig_anillos <- function(r, serie = NULL) {
   f <- ggplot(r, aes(anillo, estimate)) +
@@ -54,58 +55,67 @@ fig_anillos <- function(r, serie = NULL) {
 
 # ---- Gráfico 6: atenuación con la distancia ----
 
-res <- rbindlist(lapply(names(PRECIOS), att_anillos, grupo = "anillo"))
-res[, anillo := factor(ANILLOS[codigo + 1L], levels = ANILLOS)]
-print(dcast(res, combustible ~ anillo, value.var = c("estimate", "se"))[, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)])   # cifras que cita el texto
+redondear <- function(d) mutate(d, across(where(is.numeric), \(v) round(v, 3)))
+res <- map(names(PRECIOS), att_anillos, grupo = "anillo") |>
+  list_rbind() |>
+  mutate(anillo = factor(ANILLOS[codigo + 1L], levels = ANILLOS))
+res |>   # cifras que cita el texto
+  pivot_wider(id_cols = combustible, names_from = anillo, values_from = c(estimate, se)) |>
+  arrange(combustible) |> redondear() |> print()
 guardar(fig_anillos(res), "grafico_06_atenuacion_distancia.pdf", alto = 3.2)
 
 # ---- Gráfico 10: atenuación por tipo de entrante ----
 
-rt <- rbindlist(lapply(names(PRECIOS), att_anillos, grupo = "anillo_tipo"))
-rt[, `:=`(anillo = factor(ANILLOS[codigo %/% 2L + 1L], levels = ANILLOS), tipo = factor(TIPOS[codigo %% 2L + 1L], levels = TIPOS))]
-print(dcast(rt, combustible + anillo ~ tipo, value.var = c("estimate", "se", "p"))[, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)])
+rt <- map(names(PRECIOS), att_anillos, grupo = "anillo_tipo") |>
+  list_rbind() |>
+  mutate(anillo = factor(ANILLOS[codigo %/% 2L + 1L], levels = ANILLOS), tipo = factor(TIPOS[codigo %% 2L + 1L], levels = TIPOS))
+rt |>
+  pivot_wider(id_cols = c(combustible, anillo), names_from = tipo, values_from = c(estimate, se, p)) |>
+  arrange(combustible, anillo) |> redondear() |> print()
 guardar(fig_anillos(rt, "tipo"), "grafico_10_atenuacion_tipo.pdf", alto = 3.4)
 
 # ---- Tabla 6: ATT estático por radio de tratamiento ----
 
-att_radio <- rbindlist(lapply(RADIOS, function(r) {
+att_radio <- map(RADIOS, function(r) {
   d <- cohortes_sunab(muestra_estacion(panel, CTRL_ESTRICTO, V$focal, radio = r))
-  rbindlist(lapply(names(PRECIOS), function(fv) {
-    x <- d[!is.na(get(fv))]
+  map(names(PRECIOS), function(fv) {
+    x <- filter(d, !is.na(.data[[fv]]))
     m <- estimar_sa(x, fv)
     ct <- att_sa(m, x)
-    data.table(radio = r, fv = fv, att = ct$est, se = ct$se, p = ct$p,
-               tratadas = n_estaciones(m, x)[1], controles = n_estaciones(m, x)[2])
-  }))
-}))
+    tibble(radio = r, fv = fv, att = ct$est, se = ct$se, p = ct$p,
+           tratadas = n_estaciones(m, x)[1], controles = n_estaciones(m, x)[2])
+  }) |> list_rbind()
+}) |> list_rbind()
 print(att_radio)
 message(sprintf("Tabla 6: tratadas a 3 km (cohortes focales) con una entrada de 2013 a <= 5 km, fuera a 5 km: %d",
-                uniqueN(panel[base == TRUE & !is.na(g_entry_r3) & year(g_entry_r3) >= V$focal & year(g5_entry) < V$focal, station_key])))
+                n_distinct(filter(panel, base == TRUE, !is.na(g_entry_r3), year(g_entry_r3) >= V$focal, year(g5_entry) < V$focal)$station_key)))
 
 cuerpo <- unlist(lapply(RADIOS, function(r) {
-  a <- att_radio[radio == r][match(names(PRECIOS), fv)]
+  a <- att_radio |> filter(radio == r) |> slice(match(names(PRECIOS), fv))
   c(filas_coef(sprintf("Entrada a %d km o menos", r), a$att, a$se, a$p),
     fila("\\quad Tratadas", a$tratadas), "\\addlinespace")
 }))
 escribir_tabla("lcccc", c(fila("", unname(PRECIOS)), "\\midrule", cuerpo, "\\midrule",
-                          fila("Controles", att_radio[radio == R_TRATADA][match(names(PRECIOS), fv), controles])),
+                          fila("Controles", att_radio |> filter(radio == R_TRATADA) |> slice(match(names(PRECIOS), fv)) |> pull(controles))),
                "tabla_06_att_radios.tex")
 
 # ---- Tabla C.11: equivalencia de los anillos lejanos ----
 
 LEJANOS <- ANILLOS[-1]
-margen <- att_radio[radio == R_TRATADA, .(fv, delta = abs(att) / 2)]
-eq <- margen[res[anillo %in% LEJANOS], on = "fv"]
-eq[, `:=`(lo = estimate - qt(0.95, gl) * se, hi = estimate + qt(0.95, gl) * se)]
-eq[, p_tost := pmax(pt((estimate + delta) / se, gl, lower.tail = FALSE), pt((estimate - delta) / se, gl))]
+margen <- att_radio |> filter(radio == R_TRATADA) |> transmute(fv, delta = abs(att) / 2)
+eq <- res |>
+  filter(anillo %in% LEJANOS) |>
+  left_join(margen, by = "fv") |>
+  mutate(lo = estimate - qt(0.95, gl) * se, hi = estimate + qt(0.95, gl) * se) |>
+  mutate(p_tost = pmax(pt((estimate + delta) / se, gl, lower.tail = FALSE), pt((estimate - delta) / se, gl)))
 print(eq)
 
 cuerpo <- unlist(lapply(LEJANOS, function(a) {
-  e <- eq[anillo == a][match(names(PRECIOS), fv)]
+  e <- eq |> filter(anillo == a) |> slice(match(names(PRECIOS), fv))
   c(fila(sprintf("Anillo %s", a), sprintf("%.3f", e$estimate)),
     fila("\\quad Intervalo al 90\\%", sprintf("[%.3f; %.3f]", e$lo, e$hi)),
     fila("\\quad Valor $p$ de equivalencia (TOST)", sprintf("%.3f", e$p_tost)), "\\addlinespace")
 }))
 escribir_tabla("lcccc", c(fila("", unname(PRECIOS)), "\\midrule", cuerpo, "\\midrule",
-                          fila("Margen de equivalencia ($\\pm$)", sprintf("%.3f", margen[match(names(PRECIOS), fv), delta]))),
+                          fila("Margen de equivalencia ($\\pm$)", sprintf("%.3f", margen |> slice(match(names(PRECIOS), fv)) |> pull(delta)))),
                "tabla_C11_equivalencia_anillos.tex")
